@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Chrome profile (临时profile，重启会重建)
+.chrome-profile/
+
+# WARP状态
+.warp-enabled
+
+# 临时HTML dump
+dump.html
+ozon-403*.html
+page.html
+page2.html
+search-page.html
+
+# 输出数据
+ozon-products*.json
+ozon-cookies.json
+uploads/
+
+# Logs
+*.log
+npm-debug.log*
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local

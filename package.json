@@ -1,0 +1,23 @@
+{
+  "name": "ozon-image-search",
+  "version": "2.0.0",
+  "description": "OZON 批量图搜 - 纯 API + 浏览器双模式",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:browser": "node server.js --browser",
+    "cli": "node ozon-image-api.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "https-proxy-agent": "^6.2.1",
+    "multer": "^1.4.5-lts.1",
+    "puppeteer-core": "^23.11.1",
+    "socks-proxy-agent": "^8.0.5",
+    "ws": "^8.21.3"
+  }
+}
