@@ -1,0 +1,11 @@
+// 生成一张样本 JPEG 用于本地上传测试
+const fs = require('fs');
+const path = require('path');
+
+// 1x1 红色 JPEG (base64)
+const b64 = '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/2wBDAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAr/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/wD/2Q==';
+const buf = Buffer.from(b64, 'base64');
+const out = path.join(__dirname, '..', 'uploads', 'sample.jpg');
+fs.mkdirSync(path.dirname(out), { recursive: true });
+fs.writeFileSync(out, buf);
+console.log('wrote', out, buf.length, 'bytes');
