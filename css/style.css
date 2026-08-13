@@ -402,8 +402,9 @@ textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--prima
 }
 .file-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  grid-template-columns: repeat(auto-fill, 120px);
   gap: 12px;
+  justify-content: start;
 }
 .file-grid-scrollable {
   max-height: 360px;
