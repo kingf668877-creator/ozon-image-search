@@ -1,10 +1,8 @@
 /**
  * OZON 图搜 · 本地 Web 服务（Express + 接管已验证 Chrome CDP）
  *
- * 启动模式：
- *   node server.js              # --attach：接管本机 Chrome 9225 调试端口上已打开的 OZON 页面
- *   node server.js --browser    # --browser：headless Puppeteer 备用（不适合本机已被 WAF 标记的 IP）
- *   node server.js --api        # --api：纯 API + 代理池备用
+ * 启动方式：
+ *   node server.js              # 接管本机 Chrome 9225 调试端口上已打开的 OZON 页面
  *
  * 健康检查：
  *   GET /api/health   -> { mode, sessionOk }
@@ -22,10 +20,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
 
-const args = process.argv.slice(2);
-const MODE = args.includes('--browser') ? 'browser'
-  : args.includes('--api') ? 'api'
-  : 'attach';
+const MODE = 'attach';
 
 const PORT = Number(process.env.PORT || 5443);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -182,8 +177,12 @@ const storage = multer.diskStorage({
     cb(null, dir);
   },
   filename: (req, file, cb) => {
-    const safe = Buffer.from(file.originalname, 'latin1').toString('utf8');
-    cb(null, Date.now() + '_' + safe);
+    // multer 默认把 originalname 当 latin1，要还原 UTF-8（中文/特殊字符文件名）
+    const original = Buffer.from(file.originalname || 'upload', 'latin1').toString('utf8');
+    const ts = Date.now();
+    // 给文件名加时间戳前缀防冲突，但保留原文件名作为后缀，这样后端 img.name 与实际文件名一致
+    // express.static 自动 URL-encode 文件名（包括 ! 等特殊字符），所以 ! 没问题
+    cb(null, `${ts}_${original}`);
   },
 });
 const upload = multer({ storage, limits: { fileSize: 8 * 1024 * 1024 } });
@@ -232,7 +231,9 @@ app.get('/api/tasks', (req, res) => {
 app.post('/api/upload/:taskId', upload.array('files', 200), (req, res) => {
   const task = getTask(req.params.taskId);
   const uploaded = (req.files || []).map((f) => ({
-    name: Buffer.from(f.originalname, 'latin1').toString('utf8'),
+    // 用实际文件名（f.filename = 时间戳_原名）作为 key，确保前端能正确访问 /uploads/{taskId}/{name}
+    name: f.filename,
+    originalName: Buffer.from(f.originalname || '', 'latin1').toString('utf8'),
     diskPath: f.path,
     size: f.size,
     status: 'pending',
@@ -243,15 +244,85 @@ app.post('/api/upload/:taskId', upload.array('files', 200), (req, res) => {
   res.json({ success: true, task_id: task.taskId, uploaded_count: uploaded.length });
 });
 
+// 下载 URL 图片到本地，返回 diskPath；失败返回 null
+async function downloadUrlToLocal(url, taskId, idx) {
+  try {
+    const dir = path.join(UPLOAD_DIR, taskId);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // 优先从 URL 后缀推导
+    let ext = '.jpg';
+    try {
+      const u = new URL(url);
+      const p = u.pathname;
+      const m = p.match(/\.(jpe?g|png|webp|gif|bmp|tiff?)($|\?)/i);
+      if (m) ext = '.' + m[1].toLowerCase();
+      else if (p.includes('.')) {
+        const last = p.split('.').pop().split(/[\?#]/)[0];
+        if (/^[a-z0-9]{2,5}$/i.test(last)) ext = '.' + last.toLowerCase();
+      }
+    } catch {}
+    const safeName = `${Date.now()}_${idx}${ext}`;
+    const filePath = path.join(dir, safeName);
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 30000);
+    const resp = await fetch(url, { signal: ctrl.signal, redirect: 'follow' });
+    clearTimeout(t);
+    if (!resp.ok) return { ok: false, error: `HTTP ${resp.status}` };
+    // 如果响应头有正确的 content-type，用它纠正后缀
+    const ct = resp.headers.get('content-type') || '';
+    if (ct.includes('png') && ext === '.jpg') ext = '.png';
+    else if (ct.includes('webp') && ext === '.jpg') ext = '.webp';
+    else if (ct.includes('gif') && ext === '.jpg') ext = '.gif';
+    if (ext !== '.' + safeName.split('.').pop()) {
+      const newName = safeName.replace(/\.[^.]+$/, ext);
+      const newPath = path.join(dir, newName);
+      const ab = await resp.arrayBuffer();
+      fs.writeFileSync(newPath, Buffer.from(ab));
+      return { ok: true, diskPath: newPath, name: newName };
+    }
+    const ab = await resp.arrayBuffer();
+    fs.writeFileSync(filePath, Buffer.from(ab));
+    return { ok: true, diskPath: filePath, name: safeName };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 app.post('/api/upload_urls', async (req, res) => {
   const { urls = [], auto_search = true, task_id } = req.body || {};
   const task = task_id ? getTask(task_id) : getTask(crypto.randomBytes(8).toString('hex'));
+
+  // 先把 items 加入 task
   const items = urls.map((u) => ({ name: u, url: u, status: 'pending' }));
   task.images.push(...items);
   task.total = task.images.length;
   task.status = 'queued';
-  if (auto_search) setImmediate(() => startSearch(task.taskId));
+
+  // 先同步下载所有 URL 图片到本地（用于结果区展示缩略图 + 提供给 runSearch 走本地路径）
+  // 限制并发数为 5，避免阻塞
+  const CONCURRENCY = 5;
+  let cursor = 0;
+  async function worker() {
+    while (cursor < urls.length) {
+      const i = cursor++;
+      const u = urls[i];
+      const img = task.images[i];
+      const r = await downloadUrlToLocal(u, task.taskId, i);
+      if (r.ok) {
+        img.diskPath = r.diskPath;
+        img.name = r.name;
+        img.originalName = u;
+      } else {
+        img.error = r.error;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, urls.length) }, () => worker()));
+
+  // 立即返回 task_id
   res.json({ success: true, task_id: task.taskId, total_uploaded: items.length });
+
+  if (auto_search) setImmediate(() => startSearch(task.taskId));
 });
 
 app.post('/api/search/:taskId', (req, res) => {
@@ -317,6 +388,24 @@ app.post('/api/cleanup/:taskId', (req, res) => {
   } catch (e) { /* ignore */ }
   STATE.tasks.delete(taskId);
   res.json({ success: true });
+});
+
+// 批量按 taskId 清理（前端 pagehide 时调用，清掉本 tab 访问过的所有 task）
+app.post('/api/cleanup_batch', (req, res) => {
+  const { taskIds = [] } = req.body || {};
+  let removed = 0;
+  for (const taskId of taskIds) {
+    if (!taskId || typeof taskId !== 'string') continue;
+    const taskDir = path.join(UPLOAD_DIR, taskId);
+    try {
+      if (fs.existsSync(taskDir)) {
+        fs.rmSync(taskDir, { recursive: true, force: true });
+        removed++;
+      }
+    } catch (e) { /* ignore */ }
+    STATE.tasks.delete(taskId);
+  }
+  res.json({ success: true, removed });
 });
 
 app.use('/uploads', express.static(UPLOAD_DIR));
