@@ -514,8 +514,15 @@
       const remain = avg * (total - cur);
       $('#estimatedTime').textContent = fmtTime(remain);
     }
-    const curImg = (j.image_statuses || []).find((s) => s.status === 'searching');
-    $('#currentImage').textContent = curImg ? curImg.name : (j.image_statuses && j.image_statuses.length ? j.image_statuses[j.image_statuses.length - 1].name : '-');
+    // 显示「搜索中：N/M 张」的进度式描述（分子=已完成数，随搜索推进 0→总数）
+    const imgStatuses = j.image_statuses || [];
+    const imgTotal = imgStatuses.length || j.total || 0;
+    let doneCount = 0;
+    imgStatuses.forEach((s) => {
+      if (s.status === 'completed' || s.status === 'no_results' || s.status === 'failed') doneCount++;
+    });
+    const statusLabel = (j.status === 'completed') ? '已完成' : '搜索中';
+    $('#currentImage').textContent = `${statusLabel}：${doneCount}/${imgTotal} 张`;
     // 渲染状态列表
     const list = $('#imageStatusList');
     list.innerHTML = '';
