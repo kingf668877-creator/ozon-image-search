@@ -190,7 +190,8 @@
   function setupUrlPanel() {
     const ta = $('#urlTextarea');
     const fileInput = $('#urlFileInput');
-    on(ta, 'input', () => {/* preview on demand only */});
+    on(ta, 'input', () => { clearTimeout(state._urlTimer); state._urlTimer = setTimeout(previewUrls, 300); });
+    on(ta, 'paste', () => { clearTimeout(state._urlTimer); state._urlTimer = setTimeout(previewUrls, 100); });
     on(fileInput, 'change', async (e) => {
       const f = e.target.files[0];
       if (!f) return;
