@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OZON 图搜批量寻源 · 以图搜款找爆品</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23005bff'/%3E%3Ctext x='32' y='42' font-size='32' font-weight='800' font-family='Inter,sans-serif' fill='white' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="css/style.css?v=20260813a">
+  <link rel="stylesheet" href="css/style.css?v=20260813c">
 </head>
 <body>
   <!-- 背景装饰 -->
@@ -44,9 +44,6 @@
           <h1 class="hero-title">
             上传图片，<span class="gradient-text">一键搜遍 OZON 同款</span>
           </h1>
-          <p class="hero-desc">
-            借助 OZON 官网 <code class="inline-code">composer-api.bx/_action/searchByImageUpload</code> 图搜入口，支持批量上传图片，自动定位相似商品，附带价格、评分、销量等多维度信息。
-          </p>
           <div class="api-notice" id="apiNotice">
             <span class="notice-icon">🔧</span>
             <span class="notice-text">首次使用请先启动后端服务 <code class="inline-code">node server.js</code>，然后配置后端地址</span>
@@ -92,7 +89,7 @@
                 <span class="file-list-title">已上传图片</span>
                 <span class="file-list-count" id="fileCount">0 张</span>
               </div>
-              <div class="file-grid" id="fileGrid"></div>
+              <div class="file-grid file-grid-scrollable" id="fileGrid"></div>
               <div class="file-list-more" id="fileListMore" hidden>
                 <button class="btn btn-ghost btn-sm" id="loadMoreFilesBtn">加载更多（已显示 <span id="fileShown">0</span> / <span id="fileTotal">0</span>）</button>
               </div>
@@ -119,7 +116,7 @@ https://example.com/img3.webp
                 <span class="file-list-title">链接预览</span>
                 <span class="file-list-count" id="urlCount">0 条</span>
               </div>
-              <div class="file-grid" id="urlGrid"></div>
+              <div class="file-grid file-grid-scrollable" id="urlGrid"></div>
             </div>
           </div>
 
@@ -140,16 +137,23 @@ https://example.com/img3.webp
               <div class="file-list-header">
                 <span class="file-list-title" id="tableFileName">文件名</span>
                 <span class="file-list-count" id="tableUrlCount">0 条链接</span>
-                <button class="btn btn-ghost btn-sm" id="clearTableBtn" style="margin-left:auto">移除文件</button>
+                <button class="btn btn-outline btn-sm" id="previewTableBtn" style="margin-left:8px">预览链接</button>
+                <button class="btn btn-danger btn-sm" id="clearTableBtn" style="margin-left:auto">🗑 移除文件</button>
               </div>
-              <textarea id="tableUrlTextarea" rows="8" placeholder="识别到的图片链接将显示在这里..." style="margin-top:8px;width:100%;border:1px solid #e0e0e6;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;resize:vertical" readonly></textarea>
-              <p class="panel-hint" style="margin-top:6px;font-size:12px;color:#a0a0b0">可手动编辑上方文本框中的链接，编辑后点击下方按钮刷新</p>
+              <textarea id="tableUrlTextarea" rows="6" placeholder="识别到的图片链接将显示在这里..." style="margin-top:8px;width:100%;border:1px solid #e0e0e6;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;resize:vertical" readonly></textarea>
+              <p class="panel-hint" style="margin-top:6px;font-size:12px;color:#a0a0b0">可手动编辑上方文本框中的链接，编辑后点击刷新按钮更新</p>
               <button class="btn btn-outline btn-sm" id="refreshTableUrlsBtn" style="margin-top:6px">🔄 刷新链接列表</button>
+              <div class="url-preview" id="tablePreview" hidden style="margin-top:12px">
+                <div class="file-list-header">
+                  <span class="file-list-title">链接预览</span>
+                </div>
+                <div class="file-grid file-grid-scrollable" id="tableGrid"></div>
+              </div>
             </div>
           </div>
 
           <div class="upload-actions">
-            <button class="btn btn-ghost" id="clearBtn" hidden>清空列表</button>
+            <button class="btn btn-ghost" id="clearBtn" hidden>🗑 清空图片</button>
             <button class="btn btn-primary" id="searchBtn" disabled>🔍 开始批量搜索</button>
           </div>
           <div class="upload-timing" id="uploadTiming" hidden>⏱️ 接口耗时：<span id="timingVal">0</span> 秒</div>
@@ -161,7 +165,10 @@ https://example.com/img3.webp
         <div class="card progress-card">
           <div class="card-header">
             <h2 class="card-title">⏳ 搜索进度</h2>
-            <span class="progress-status" id="progressStatus">准备中...</span>
+            <div class="progress-header-right">
+              <span class="progress-status" id="progressStatus">准备中...</span>
+              <button class="btn btn-danger btn-sm" id="cancelBtn" hidden>⏹ 停止任务</button>
+            </div>
           </div>
           <div class="progress-bar-wrap">
             <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
@@ -229,10 +236,8 @@ https://example.com/img3.webp
           </div>
           <div class="logo-text"><span class="logo-main">OZON</span><span class="logo-accent">图搜</span></div>
         </div>
-        <p class="footer-desc">OZON 批量图搜找爆品 · 借助浏览器自动化调用官方图搜接口</p>
       </div>
       <div class="footer-bottom">
-        <p>数据来源：ozon.ru · 仅供选品参考 · © 2026</p>
       </div>
     </div>
   </footer>
@@ -315,6 +320,6 @@ https://example.com/img3.webp
   </template>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="js/app.js?v=20260813d"></script>
+  <script src="js/app.js?v=20260813h"></script>
 </body>
 </html>
