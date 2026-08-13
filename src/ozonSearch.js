@@ -364,11 +364,30 @@ async function searchByImage(handle, opts) {
   }
 
   const imageId = uploaded.imageId;
+
+  // 优先走纯 API 方式（~1秒），失败再回退到 navigate+DOM（~5秒）
+  try {
+    const apiResult = await searchByImageApi(handle, imageId);
+    return {
+      ok: true,
+      imageId,
+      imageSrc: uploaded.imageSrc || '',
+      redirectUri: SEARCH_PATH_PREFIX + imageId,
+      products: apiResult.products,
+      meta: {
+        method: 'api',
+        tilesFound: apiResult.count,
+        uniqueProducts: apiResult.count,
+      },
+    };
+  } catch (apiErr) {
+    console.error('[ozonSearch] API mode failed, falling back to DOM:', apiErr.message);
+  }
+
+  // 回退：navigate + DOM 提取
   const searchUrl = OZON_HOST + SEARCH_PATH_PREFIX + encodeURIComponent(imageId);
   const finalState = await navigateAndWait(handle, searchUrl);
   const tiles = await evalJson(handle, EXTRACT_TILES_JS);
-
-  // 给前端排序用的 rank
   tiles.products.forEach((p, i) => { p.rank = i + 1; });
 
   return {
@@ -378,6 +397,7 @@ async function searchByImage(handle, opts) {
     redirectUri: SEARCH_PATH_PREFIX + imageId,
     products: tiles.products,
     meta: {
+      method: 'dom',
       tilesFound: tiles.tilesFound,
       uniqueProducts: tiles.uniqueProducts,
       finalUrl: finalState.url,
@@ -385,11 +405,96 @@ async function searchByImage(handle, opts) {
   };
 }
 
+/**
+ * 纯 API 方式：直接 fetch entrypoint-api.bx 获取图搜结果 JSON，
+ * 解析 tileGridDesktop widget，跳过 navigate + DOM 渲染。
+ */
+const SEARCH_API_PATH = '/api/entrypoint-api.bx/page/json/v2';
+
+async function searchByImageApi(handle, imageId) {
+  const searchPath = '/search-by-image?image_id=' + imageId;
+  const expr = `
+    (async () => {
+      try {
+        const apiUrl = ${JSON.stringify(SEARCH_API_PATH)} + '?url=' + encodeURIComponent(${JSON.stringify(searchPath)});
+        const res = await fetch(apiUrl, { credentials: 'include' });
+        if (!res.ok) return { ok: false, error: 'HTTP ' + res.status };
+        const json = await res.json();
+
+        const widgetStates = json.widgetStates || {};
+        const tileKey = Object.keys(widgetStates).find(function(k) { return k.indexOf('tileGridDesktop') === 0; });
+        if (!tileKey) return { ok: false, error: 'no_tileGrid', keys: Object.keys(widgetStates) };
+
+        const tileData = JSON.parse(widgetStates[tileKey]);
+        const items = tileData.items || [];
+
+        const products = items.map(function(item, i) {
+          var url = '', title = '', price = '', oldPrice = '', discount = '', image = '';
+          try {
+            if (item.action && item.action.link) url = 'https://www.ozon.ru' + item.action.link.split('?')[0];
+          } catch(e) {}
+          try {
+            var states = item.mainState || [];
+            for (var s = 0; s < states.length; s++) {
+              var st = states[s];
+              if (st.type === 'priceV2' && st.priceV2) {
+                var ps = st.priceV2.price || [];
+                for (var p = 0; p < ps.length; p++) {
+                  if (ps[p].textStyle === 'PRICE') price = ps[p].text;
+                  if (ps[p].textStyle === 'ORIGINAL_PRICE') oldPrice = ps[p].text;
+                }
+                if (st.priceV2.discount) discount = st.priceV2.discount;
+              }
+              if (st.type === 'textDS' && st.textDS && st.textDS.text) {
+                var isTileName = st.textDS.testInfo && st.textDS.testInfo.automatizationId === 'tile-name';
+                if (isTileName || (!title && st.textDS.text.indexOf('шт осталось') === -1)) {
+                  title = st.textDS.text;
+                }
+              }
+            }
+          } catch(e) {}
+          try {
+            if (item.tileImage && item.tileImage.items && item.tileImage.items[0] && item.tileImage.items[0].image) {
+              image = item.tileImage.items[0].image.link || '';
+            }
+          } catch(e) {}
+          return { rank: i + 1, url: url, title: title, price: price, oldPrice: oldPrice, discount: discount, image: image };
+        });
+
+        return { ok: true, count: products.length, products: products };
+      } catch (e) {
+        return { ok: false, error: String(e && e.message || e) };
+      }
+    })()
+  `;
+
+  const r = await handle.send('Runtime.evaluate', {
+    expression: `(async () => { return JSON.stringify(await (${expr})); })()`,
+    returnByValue: true,
+    awaitPromise: true,
+  });
+
+  if (r && r.exceptionDetails) {
+    throw new Error('searchByImageApi eval error: ' + (r.exceptionDetails.exception && r.exceptionDetails.exception.description || 'unknown'));
+  }
+
+  let out;
+  try { out = JSON.parse(r.result.value || 'null'); } catch { out = null; }
+  if (!out || !out.ok) {
+    const err = new Error('searchByImageApi failed: ' + (out && out.error));
+    err.code = 'api_search_failed';
+    err.detail = out;
+    throw err;
+  }
+  return out;
+}
+
 module.exports = {
   attachChrome,
   findOzonTab,
   listTabs,
   searchByImage,
+  searchByImageApi,
   navigateAndWait,
   evalJson,
   evalNoResult,
