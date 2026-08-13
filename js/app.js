@@ -634,6 +634,10 @@
     node.querySelector('.mini-title').textContent = item.title || '暂无标题';
     node.querySelector('.mini-rank').textContent = '#' + rank;
     node.querySelector('.mini-price').textContent = item.price ? `₽ ${item.price}` : '-';
+    const meta = node.querySelector('.mini-meta');
+    meta.innerHTML = '';
+    if (item.rating) meta.appendChild(h('span', { class: 'mini-meta-item' }, `⭐ ${item.rating}`));
+    if (item.reviews) meta.appendChild(h('span', { class: 'mini-meta-item' }, `💬 ${item.reviews} 条评价`));
     return node;
   }
 
@@ -647,7 +651,7 @@
     const meta = node.querySelector('.product-meta');
     meta.innerHTML = '';
     if (item.rating) meta.appendChild(h('span', { class: 'meta-item' }, `⭐ ${item.rating}`));
-    if (item.reviews) meta.appendChild(h('span', { class: 'meta-item' }, `💬 ${item.reviews}`));
+    if (item.reviews) meta.appendChild(h('span', { class: 'meta-item' }, `💬 ${item.reviews} 条评价`));
     if (item.rank) meta.appendChild(h('span', { class: 'meta-item' }, `#${item.rank}`));
     const fill = node.querySelector('.similarity-fill');
     const sim = item.similarity != null ? item.similarity : (item.rank ? Math.max(0, 1 - item.rank / 50) : 0.5);

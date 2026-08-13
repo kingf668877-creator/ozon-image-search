@@ -163,15 +163,15 @@ const EXTRACT_TILES_JS = `
     }
 
     let rating = '';
-    const ratingSpans = tile.querySelectorAll('[class*="ui-b3_4_1"], [class*="rating"], [class*="a7a_3_2"]');
+    const ratingSpans = tile.querySelectorAll('.qg1_21, .c7w1_7_7-a0, [class*="ui-b3_4_1"], [class*="rating"], [class*="a7a_3_2"]');
     for (const sp of ratingSpans) {
-      const t = sp.textContent.trim();
-      if (/\\d[.,]\\d/.test(t)) { rating = t.slice(0, 10); break; }
+      const match = sp.textContent.trim().match(/\d[.,]\d/);
+      if (match) { rating = match[0]; break; }
     }
     let reviews = '';
-    const tileText = (tile.innerText || '').replace(/\\s+/g, ' ');
-    const reviewMatch = tileText.match(/(\\d+)\\s*(?:отзыв|оцен)/i);
-    if (reviewMatch) reviews = reviewMatch[1];
+    const tileText = (tile.innerText || '').replace(/\s+/g, ' ');
+    const reviewMatch = tileText.match(/([\d\s\u00a0]+)\s*(?:отзыв(?:а|ов)?|оцен(?:ка|ок)?)/i);
+    if (reviewMatch) reviews = reviewMatch[1].replace(/[^\d]/g, '');
 
     out.push({
       url: href,
@@ -429,12 +429,15 @@ async function searchByImageApi(handle, imageId) {
         const items = tileData.items || [];
 
         const products = items.map(function(item, i) {
-          var url = '', title = '', price = '', oldPrice = '', discount = '', image = '';
+          var url = '', title = '', price = '', oldPrice = '', discount = '', rating = '', reviews = '', image = '';
           try {
             if (item.action && item.action.link) url = 'https://www.ozon.ru' + item.action.link.split('?')[0];
           } catch(e) {}
           try {
-            var states = item.mainState || [];
+            var states = [];
+            if (Array.isArray(item.mainState)) states = states.concat(item.mainState);
+            if (Array.isArray(item.availableState)) states = states.concat(item.availableState);
+            if (Array.isArray(item.availableStates)) states = states.concat(item.availableStates);
             for (var s = 0; s < states.length; s++) {
               var st = states[s];
               if (st.type === 'priceV2' && st.priceV2) {
@@ -446,10 +449,20 @@ async function searchByImageApi(handle, imageId) {
                 if (st.priceV2.discount) discount = st.priceV2.discount;
               }
               if (st.type === 'textDS' && st.textDS && st.textDS.text) {
+                var text = String(st.textDS.text).trim();
                 var isTileName = st.textDS.testInfo && st.textDS.testInfo.automatizationId === 'tile-name';
-                if (isTileName || (!title && st.textDS.text.indexOf('шт осталось') === -1)) {
-                  title = st.textDS.text;
+                if (isTileName || (!title && text.indexOf('шт осталось') === -1)) {
+                  title = text;
                 }
+                var ratingMatch = text.match(/(?:рейтинг|оценка)?\s*(\d[.,]\d)/i);
+                if (!rating && ratingMatch) rating = ratingMatch[1];
+                var reviewMatch = text.match(/([\d\s\u00a0]+)\s*(?:отзыв(?:а|ов)?|оцен(?:ка|ок)?)/i);
+                if (!reviews && reviewMatch) reviews = reviewMatch[1].replace(/[^\d]/g, '');
+              }
+              if (st.type === 'rating' || st.rating) {
+                var ratingState = st.rating || st;
+                rating = rating || String(ratingState.value || ratingState.rating || ratingState.text || '');
+                reviews = reviews || String(ratingState.reviewsCount || ratingState.reviewCount || ratingState.count || '');
               }
             }
           } catch(e) {}
@@ -458,7 +471,7 @@ async function searchByImageApi(handle, imageId) {
               image = item.tileImage.items[0].image.link || '';
             }
           } catch(e) {}
-          return { rank: i + 1, url: url, title: title, price: price, oldPrice: oldPrice, discount: discount, image: image };
+          return { rank: i + 1, url: url, title: title, price: price, oldPrice: oldPrice, discount: discount, rating: rating, reviews: reviews, image: image };
         });
 
         return { ok: true, count: products.length, products: products };
