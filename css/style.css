@@ -289,6 +289,8 @@ input, textarea, select { font-family: inherit; font-size: inherit; outline: non
   margin-bottom: 24px;
 }
 .card-header { margin-bottom: 20px; }
+.card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.card-header .progress-header-right { display: flex; align-items: center; gap: 12px; }
 .card-title {
   font-size: 20px;
   font-weight: 700;
@@ -402,6 +404,25 @@ textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--prima
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   gap: 12px;
+}
+.file-grid-scrollable {
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.file-grid-scrollable::-webkit-scrollbar {
+  width: 6px;
+}
+.file-grid-scrollable::-webkit-scrollbar-track {
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+}
+.file-grid-scrollable::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 3px;
+}
+.file-grid-scrollable::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
 }
 .file-item {
   position: relative;
@@ -583,6 +604,24 @@ textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--prima
   box-shadow: 0 12px 28px rgba(0, 91, 255, 0.35);
 }
 .btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: white;
+  border: 1.5px solid var(--danger);
+  box-shadow: 0 4px 12px rgba(229, 52, 90, 0.25);
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-dark, #C9234A);
+  border-color: var(--danger-dark, #C9234A);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(229, 52, 90, 0.35);
+}
+.btn-danger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   box-shadow: none;
