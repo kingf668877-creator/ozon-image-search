@@ -658,12 +658,23 @@
   }
   async function cleanupCurrentTask() {
     if (!state.taskId) return;
+    try {
+      // 用 sendBeacon 确保页面关闭时也能发出去
+      navigator.sendBeacon(`${state.apiBase}/api/cleanup/${state.taskId}`);
+    } catch {}
     try { await fetch(`${state.apiBase}/api/tasks/${state.taskId}/cancel`, { method: 'POST' }); } catch {}
   }
 
   // ============== Lifecycle ==============
   function setupLifecycle() {
-    window.addEventListener('beforeunload', () => { if (state.taskId) cleanupCurrentTask(); });
+    // 页面关闭时：清理当前任务文件 + 全局清理所有 uploads
+    window.addEventListener('beforeunload', () => {
+      try { navigator.sendBeacon(`${state.apiBase}/api/cleanup`); } catch {}
+    });
+    // 页面刷新前也触发清理
+    window.addEventListener('pagehide', () => {
+      try { navigator.sendBeacon(`${state.apiBase}/api/cleanup`); } catch {}
+    });
   }
 
   // ============== Init ==============

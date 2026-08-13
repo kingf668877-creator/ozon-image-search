@@ -142,6 +142,35 @@ app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 const UPLOAD_DIR = path.join(__dirname, 'uploads');
+
+// 清理 uploads 目录（删除所有子目录和文件）
+function cleanupUploads() {
+  try {
+    if (fs.existsSync(UPLOAD_DIR)) {
+      const entries = fs.readdirSync(UPLOAD_DIR);
+      for (const entry of entries) {
+        const fullPath = path.join(UPLOAD_DIR, entry);
+        const stat = fs.statSync(fullPath);
+        if (stat.isDirectory()) {
+          fs.rmSync(fullPath, { recursive: true, force: true });
+        } else {
+          fs.unlinkSync(fullPath);
+        }
+      }
+      console.log(`[CLEANUP] 删除 ${entries.length} 个 uploads 条目`);
+    }
+  } catch (e) {
+    console.error('[CLEANUP] 清理失败:', e.message);
+  }
+}
+
+// 清空内存中的所有任务
+function clearAllTasks() {
+  STATE.tasks.clear();
+}
+
+// 启动时自动清理上次残留的 uploads
+cleanupUploads();
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
@@ -267,6 +296,26 @@ app.post('/api/tasks/:taskId/cancel', (req, res) => {
   const t = getTask(req.params.taskId);
   t.canceled = true;
   t.status = 'failed';
+  res.json({ success: true });
+});
+
+// 清理所有上传文件和内存任务（页面关闭/刷新时调用）
+app.post('/api/cleanup', (req, res) => {
+  cleanupUploads();
+  clearAllTasks();
+  res.json({ success: true });
+});
+
+// 按任务ID清理（删除该任务的上传文件和内存数据）
+app.post('/api/cleanup/:taskId', (req, res) => {
+  const taskId = req.params.taskId;
+  const taskDir = path.join(UPLOAD_DIR, taskId);
+  try {
+    if (fs.existsSync(taskDir)) {
+      fs.rmSync(taskDir, { recursive: true, force: true });
+    }
+  } catch (e) { /* ignore */ }
+  STATE.tasks.delete(taskId);
   res.json({ success: true });
 });
 
