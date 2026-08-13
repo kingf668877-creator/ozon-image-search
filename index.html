@@ -71,13 +71,13 @@
           </div>
 
           <div class="upload-tabs" id="uploadTabs">
-            <button class="upload-tab active" data-tab="batch">🖼️ 图片批量上传</button>
-            <button class="upload-tab" data-tab="link">🔗 图片链接批量上传</button>
-            <button class="upload-tab" data-tab="table">📋 图片表格批量上传</button>
+            <button class="upload-tab active" data-tab="link">🔗 图片链接批量上传</button>
+            <button class="upload-tab" data-tab="batch">🖼️ 图片批量上传</button>
+            <button class="upload-tab" data-tab="table">📋 表格批量上传</button>
           </div>
 
           <!-- 批量上传面板 -->
-          <div class="upload-panel active" id="panel-batch">
+          <div class="upload-panel" id="panel-batch">
             <div class="drop-zone" id="dropZone">
               <svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
                 <path d="M32 8 L32 40 M20 28 L32 40 L44 28" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
@@ -100,7 +100,7 @@
           </div>
 
           <!-- URL 面板 -->
-          <div class="upload-panel" id="panel-link">
+          <div class="upload-panel active" id="panel-link">
             <p class="panel-hint">每行粘贴一个图片 URL 地址，支持 http/https 链接，不限数量</p>
             <textarea id="urlTextarea" rows="8" placeholder="https://example.com/img1.jpg
 https://example.com/img2.png
@@ -125,12 +125,26 @@ https://example.com/img3.webp
 
           <!-- 表格面板 -->
           <div class="upload-panel" id="panel-table">
-            <p class="panel-hint">每个单元格上传一张图片，点击单元格选择文件或拖入图片，可任意添加行数</p>
-            <div class="table-grid" id="tableGrid"></div>
-            <div class="table-actions">
-              <button class="btn btn-outline btn-sm" id="addTableRowBtn">+ 添加一行</button>
-              <button class="btn btn-ghost btn-sm" id="clearTableBtn">清空全部</button>
-              <span class="table-count" id="tableCount">3 张图片</span>
+            <p class="panel-hint">上传 Excel (.xlsx/.xls) 或 CSV 文件，自动识别表格中的图片链接</p>
+            <div class="drop-zone" id="tableDropZone">
+              <svg viewBox="0 0 64 64" width="48" height="48" aria-hidden="true">
+                <path d="M16 8 L40 8 L52 20 L52 56 L16 56 Z" stroke="currentColor" stroke-width="3" fill="none" stroke-linejoin="round"/>
+                <path d="M40 8 L40 20 L52 20" stroke="currentColor" stroke-width="3" fill="none" stroke-linejoin="round"/>
+                <path d="M24 32 L44 32 M24 40 L44 40 M24 48 L36 48" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/>
+              </svg>
+              <p class="drop-zone-title">拖拽表格文件到此处，或 <span class="drop-zone-link">点击选择文件</span></p>
+              <p class="drop-zone-sub">支持 .xlsx / .xls / .csv 格式</p>
+              <input type="file" id="tableFileInput" accept=".xlsx,.xls,.csv" hidden>
+            </div>
+            <div class="table-file-info" id="tableFileInfo" hidden>
+              <div class="file-list-header">
+                <span class="file-list-title" id="tableFileName">文件名</span>
+                <span class="file-list-count" id="tableUrlCount">0 条链接</span>
+                <button class="btn btn-ghost btn-sm" id="clearTableBtn" style="margin-left:auto">移除文件</button>
+              </div>
+              <textarea id="tableUrlTextarea" rows="8" placeholder="识别到的图片链接将显示在这里..." style="margin-top:8px;width:100%;border:1px solid #e0e0e6;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;resize:vertical" readonly></textarea>
+              <p class="panel-hint" style="margin-top:6px;font-size:12px;color:#a0a0b0">可手动编辑上方文本框中的链接，编辑后点击下方按钮刷新</p>
+              <button class="btn btn-outline btn-sm" id="refreshTableUrlsBtn" style="margin-top:6px">🔄 刷新链接列表</button>
             </div>
           </div>
 
@@ -300,6 +314,7 @@ https://example.com/img3.webp
     </a>
   </template>
 
-  <script src="js/app.js?v=20260813c"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="js/app.js?v=20260813d"></script>
 </body>
 </html>

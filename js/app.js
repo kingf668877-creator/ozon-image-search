@@ -24,7 +24,7 @@
   // ============== 状态 ==============
   const state = {
     apiBase: DEFAULT_API_BASE,
-    activeTab: 'batch',
+    activeTab: 'link',
     files: [],           // { id, name, dataUrl, status }
     urls: [],            // { url, dataUrl, status }
     tableRows: [],       // [{ name, dataUrl, status }]
@@ -225,75 +225,79 @@
     });
   }
 
-  // ============== Table Panel ==============
+  // ============== Table Panel (Excel/CSV 上传) ==============
   function setupTablePanel() {
-    for (let i = 0; i < 3; i++) addTableRow();
-    on($('#addTableRowBtn'), 'click', () => addTableRow());
-    on($('#clearTableBtn'), 'click', () => { state.tableRows = []; for (let i = 0; i < 3; i++) addTableRow(); renderTable(); });
-  }
-  function addTableRow() {
-    state.tableRows.push({ name: '', dataUrl: null, status: 'pending' });
-    renderTable();
-  }
-  function renderTable() {
-    const wrap = $('#tableGrid');
-    wrap.innerHTML = '';
-    state.tableRows.forEach((row, idx) => {
-      const rowEl = h('div', { class: 'table-row' });
-      rowEl.appendChild(h('div', { class: 'table-row-index' }, String(idx + 1)));
-      const cell = h('div', { class: 'table-upload-cell' + (row.dataUrl ? ' has-file' : '') });
-      const fileInput = h('input', { type: 'file', accept: 'image/*', hidden: 'hidden' });
-      if (row.dataUrl) {
-        cell.appendChild(h('div', { class: 'table-cell-content' },
-          h('img', { src: row.dataUrl, class: 'table-cell-img' }),
-          h('span', { class: 'table-cell-name', title: row.name }, row.name),
-        ));
-        const rm = h('button', { class: 'table-cell-remove' }, '×');
-        on(rm, 'click', (e) => {
-          e.stopPropagation();
-          row.dataUrl = null; row.name = '';
-          renderTable();
-          updateSearchBtn();
-        });
-        cell.appendChild(rm);
-      } else {
-        cell.appendChild(h('span', {}, '点击或拖入图片'));
-      }
-      on(cell, 'click', () => fileInput.click());
-      on(fileInput, 'change', (e) => {
-        const f = e.target.files[0];
-        if (!f) return;
-        const reader = new FileReader();
-        reader.onload = () => { row.dataUrl = reader.result; row.name = f.name; row.file = f; renderTable(); updateSearchBtn(); };
-        reader.readAsDataURL(f);
-      });
-      ['dragover', 'dragenter'].forEach((ev) => on(cell, ev, (e) => { e.preventDefault(); cell.classList.add('dragover'); }));
-      ['dragleave', 'drop'].forEach((ev) => on(cell, ev, (e) => { e.preventDefault(); cell.classList.remove('dragover'); }));
-      on(cell, 'drop', (e) => {
-        const f = Array.from(e.dataTransfer.files).find((x) => x.type.startsWith('image/'));
-        if (!f) return;
-        const reader = new FileReader();
-        reader.onload = () => { row.dataUrl = reader.result; row.name = f.name; row.file = f; renderTable(); updateSearchBtn(); };
-        reader.readAsDataURL(f);
-      });
-      rowEl.appendChild(cell);
-      cell.appendChild(fileInput);
-      if (state.tableRows.length > 1) {
-        const rmRow = h('button', { class: 'table-row-remove', 'aria-label': '删除行' }, '×');
-        on(rmRow, 'click', () => { state.tableRows.splice(idx, 1); renderTable(); updateSearchBtn(); });
-        rowEl.appendChild(rmRow);
-      }
-      wrap.appendChild(rowEl);
+    const dropZone = $('#tableDropZone');
+    const fileInput = $('#tableFileInput');
+    on(dropZone, 'click', () => fileInput.click());
+    on(fileInput, 'change', (e) => { const f = e.target.files[0]; if (f) handleTableFile(f); });
+    ['dragover', 'dragenter'].forEach((ev) => on(dropZone, ev, (e) => { e.preventDefault(); dropZone.classList.add('dragover'); }));
+    ['dragleave', 'drop'].forEach((ev) => on(dropZone, ev, (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); }));
+    on(dropZone, 'drop', (e) => {
+      const f = Array.from(e.dataTransfer.files).find((x) => /\.(xlsx|xls|csv)$/i.test(x.name));
+      if (f) handleTableFile(f);
     });
-    const filled = state.tableRows.filter((r) => r.dataUrl).length;
-    $('#tableCount').textContent = `${filled} 张图片`;
+    on($('#clearTableBtn'), 'click', () => {
+      state.tableUrls = [];
+      $('#tableFileInfo').hidden = true;
+      $('#tableFileInput').value = '';
+      updateSearchBtn();
+    });
+    on($('#refreshTableUrlsBtn'), 'click', () => {
+      const lines = $('#tableUrlTextarea').value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      const valid = lines.filter((u) => /^https?:\/\//i.test(u));
+      state.tableUrls = valid.map((url) => ({ url, status: 'pending' }));
+      $('#tableUrlCount').textContent = `${valid.length} 条链接`;
+      updateSearchBtn();
+    });
+  }
+
+  // 解析 Excel/CSV 文件，提取所有单元格中的图片链接
+  async function handleTableFile(file) {
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = typeof XLSX !== 'undefined' ? XLSX.read(buf, { type: 'array' }) : null;
+
+      let allText = '';
+      if (wb) {
+        // 遍历所有 sheet
+        for (const name of wb.SheetNames) {
+          const ws = wb.Sheets[name];
+          const csv = XLSX.utils.sheet_to_csv(ws);
+          allText += csv + '\n';
+        }
+      } else {
+        // 纯 CSV/文本：直接读
+        allText = new TextDecoder().decode(buf);
+      }
+
+      // 从所有文本中提取图片链接
+      const urlRegex = /https?:\/\/[^\s"',;|}\]]+\.(?:jpg|jpeg|png|webp|gif|bmp|tiff?)(?:\?[^\s"',;|}\]]*)?/gi;
+      const matches = allText.match(urlRegex) || [];
+      // 去重
+      const unique = [...new Set(matches.map((u) => u.trim()))];
+
+      state.tableUrls = unique.map((url) => ({ url, status: 'pending' }));
+
+      // 展示文件信息和识别到的链接
+      $('#tableFileInfo').hidden = false;
+      $('#tableFileName').textContent = '📄 ' + file.name;
+      $('#tableUrlCount').textContent = `${unique.length} 条链接`;
+      const ta = $('#tableUrlTextarea');
+      ta.value = unique.join('\n');
+      ta.readOnly = false; // 允许用户编辑
+
+      updateSearchBtn();
+    } catch (e) {
+      alert('解析表格失败：' + e.message);
+    }
   }
 
   // ============== Search Btn ==============
   function getCurrentFileCount() {
     if (state.activeTab === 'batch') return state.files.length;
     if (state.activeTab === 'link')  return state.urls.length;
-    return state.tableRows.filter((r) => r.dataUrl).length;
+    return (state.tableUrls || []).length;
   }
   function updateSearchBtn() {
     $('#searchBtn').disabled = getCurrentFileCount() === 0 || state.isSearching;
@@ -358,13 +362,23 @@
           }).catch((e) => console.warn('chunk upload failed:', e));
         }
       } else {
-        // table
-        const fd = new FormData();
-        const filledRows = state.tableRows.filter((r) => r.dataUrl && r.file);
-        filledRows.forEach((r) => fd.append('files', r.file));
-        endpoint = `${state.apiBase}/api/upload/${state.taskId}`;
-        await fetchWithRetry(endpoint, { method: 'POST', body: fd });
-        await fetchWithRetry(`${state.apiBase}/api/search/${state.taskId}`, { method: 'POST' });
+        // table: 从 Excel/CSV 识别的 URL，走 URL 上传流程
+        const allUrls = (state.tableUrls || []).map((u) => u.url);
+        const first = allUrls.slice(0, CHUNK_SIZE);
+        await fetchWithRetry(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: first, auto_search: true, task_id: state.taskId, is_last_batch: allUrls.length <= CHUNK_SIZE, expected_total: allUrls.length }),
+        });
+        const rest = allUrls.slice(CHUNK_SIZE);
+        for (let i = 0; i < rest.length; i += CHUNK_SIZE) {
+          const batch = rest.slice(i, i + CHUNK_SIZE);
+          fetchWithRetry(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ urls: batch, auto_search: false, task_id: state.taskId, is_last_batch: i + batch.length >= rest.length, expected_total: allUrls.length }),
+          }).catch((e) => console.warn('chunk upload failed:', e));
+        }
       }
       const seconds = ((Date.now() - t0) / 1000).toFixed(1);
       $('#uploadTiming').hidden = false;
