@@ -266,4 +266,60 @@ https://example.com/img3.webp
       <div class="settings-footer">
         <button class="btn btn-ghost" id="settingsCancel">取消</button>
         <button class="btn btn-primary" id="settingsSave">保存设置</button>
-      </div
+      </div>
+    </div>
+  </div>
+
+  <!-- 商品结果弹窗 -->
+  <div class="result-modal" id="resultModal" hidden>
+    <div class="result-modal-overlay" id="resultModalOverlay"></div>
+    <div class="result-modal-panel">
+      <div class="result-modal-header">
+        <div class="result-modal-title-wrap">
+          <img class="result-modal-thumb" id="resultModalThumb" alt="">
+          <div>
+            <h3 id="resultModalTitle">商品</h3>
+            <p class="result-modal-sub" id="resultModalSub"></p>
+          </div>
+        </div>
+        <button class="result-modal-close" id="resultModalClose">×</button>
+      </div>
+      <div class="result-modal-body">
+        <div class="product-grid" id="resultModalGrid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 商品卡模板 -->
+  <template id="productCardTemplate">
+    <a class="product-card" href="#" target="_blank">
+      <div class="product-img">
+        <img loading="lazy" alt="" />
+      </div>
+      <div class="product-info">
+        <div class="product-title"></div>
+        <div class="product-price"></div>
+        <div class="product-meta"></div>
+      </div>
+      <div class="similarity-bar"><div class="similarity-fill"></div></div>
+    </a>
+  </template>
+
+  <!-- 迷你商品卡模板 -->
+  <template id="miniCardTemplate">
+    <a class="mini-card" href="#" target="_blank">
+      <div class="mini-img">
+        <img loading="lazy" alt="" />
+        <span class="mini-rank"></span>
+      </div>
+      <div class="mini-info">
+        <div class="mini-title"></div>
+        <div class="mini-price"></div>
+      </div>
+    </a>
+  </template>
+
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="js/app.js?v=20260813j"></script>
+</body>
+</html>
