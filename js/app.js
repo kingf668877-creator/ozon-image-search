@@ -685,10 +685,7 @@
     on($('#newSearchBtn'), 'click', newSearch);
     on($('#loadMoreFilesBtn'), 'click', () => { state.fileRenderCount += FILE_RENDER_BATCH; renderFileList(); });
     state.fileRenderCount = FILE_RENDER_BATCH;
-    // 默认打开设置（首次访问）
-    if (!localStorage.getItem('apiBase')) {
-      setTimeout(openSettings, 600);
-    }
+    // 后端地址默认同源 (http://localhost:5443)，无需首次弹窗
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

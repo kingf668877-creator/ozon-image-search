@@ -938,6 +938,8 @@ textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--prima
 .footer-bottom p { color: var(--text-muted); font-size: 12px; text-align: center; }
 
 /* ========== Settings Modal ========== */
+[hidden] { display: none !important; }
+
 .settings-modal, .result-modal {
   position: fixed;
   inset: 0;
