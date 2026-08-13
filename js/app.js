@@ -10,11 +10,13 @@
   'use strict';
 
   // ============== 配置 ==============
-  const DEFAULT_API_BASE = 'http://localhost:5443';
+  const DEFAULT_API_BASE = 'https://yidong.dianleida.net:21999';
   const LEGACY_API_BASES = new Set([
+    'http://localhost:5443',
+    'https://localhost:5443',
+    'https://localhost:5443/api/tasks',
     'https://192.168.1.35:5443',
     'https://yidong.dianleida.net:22000',
-    'https://localhost:5443/api/tasks',
   ]);
   const CHUNK_SIZE = 10;
   const FREIGHT_BATCH_SIZE = 5;
@@ -856,7 +858,7 @@
     on($('#newSearchBtn'), 'click', newSearch);
     on($('#loadMoreFilesBtn'), 'click', () => { state.fileRenderCount += FILE_RENDER_BATCH; renderFileList(); });
     state.fileRenderCount = FILE_RENDER_BATCH;
-    // 后端地址默认同源 (http://localhost:5443)，无需首次弹窗
+    // 默认使用线上后端，设置弹窗仍允许手动覆盖。
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
