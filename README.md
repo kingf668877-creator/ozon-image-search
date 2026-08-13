@@ -3,7 +3,7 @@
 借助浏览器自动化调用 OZON 官网图搜接口，支持批量上传图片，自动定位相似商品，附带价格、评分、销量等多维度信息。
 
 - **三种批量方式**：图片批量上传、链接批量上传、表格批量上传（解析 Excel/CSV 中的图片链接列）
-- **双模式**：浏览器接管模式（attach 本机已登录 OZON 的 Chrome）+ 纯 API 模式（命令行）
+- **浏览器接管**：复用本机已登录 OZON 的 Chrome 会话
 - **结果展示**：源图缩略图、商品图、价格、评分、销量
 - **结果导出**：JSON / Excel / CSV
 
@@ -13,14 +13,14 @@
 # 安装依赖
 npm install
 
-# 启动后端（attach 模式，端口 5443，CDP 端口 9225）
+# 启动后端（端口 5443，CDP 端口 9225）
 node server.js
 
 # 浏览器打开
 open http://localhost:5443/
 ```
 
-### 准备工作（attach 模式）
+### 准备工作
 
 1. 启动本机 Chrome / Edge，开启远程调试端口：`--remote-debugging-port=9225`
 2. 在浏览器中打开 https://www.ozon.ru 并完成登录 / captcha
@@ -59,7 +59,7 @@ curl http://localhost:5443/api/session
 
 | 路径 | 作用 |
 |------|------|
-| `server.js` | Express 服务，默认 `--attach` 模式 |
+| `server.js` | Express 服务，接管本机 Chrome |
 | `src/ozonSearch.js` | CDP 接管 + 图搜 + `.tile-root` 提取 |
 | `index.html` / `css/style.css` / `js/app.js` | 前端 UI |
 | `docs/superpowers/specs/` | 设计 spec |
@@ -70,9 +70,8 @@ curl http://localhost:5443/api/session
 - `OZON_CDP_PORT`（默认 9225）：Chrome 远程调试端口
 - `PORT`（默认 5443）：后端服务端口
 
-启动选项：
-- `node server.js` — attach 模式（推荐，需打开本机 Chrome）
-- `node server.js --browser` — browser 模式（自己启动浏览器）
+启动方式：
+- `node server.js` — 接管已开启远程调试的本机 Chrome
 
 ## 设计要点
 
