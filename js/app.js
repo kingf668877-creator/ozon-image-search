@@ -36,6 +36,8 @@
     results: {},
     pagination: { currentPage: 1, pageSize: 50, totalItems: 0, imageNames: [] },
     cleanupSentTaskId: null,
+    // 记录本 tab 创建/访问过的所有 taskIds，关闭时一并清掉
+    ownedTaskIds: new Set(JSON.parse(sessionStorage.getItem('ownedTaskIds') || '[]')),
     isSearching: false,
     elapsedTimer: null,
   };
@@ -133,6 +135,10 @@
       const fs = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'));
       handleFiles(fs);
     });
+    on($('#loadMoreFilesBtn'), 'click', () => {
+      state.fileRenderCount = Math.min(state.fileRenderCount + FILE_RENDER_BATCH, state.files.length);
+      renderFileList();
+    });
   }
 
   function handleFiles(fileList) {
@@ -148,6 +154,8 @@
       const reader = new FileReader();
       reader.onload = () => {
         item.dataUrl = reader.result;
+        // 上传后直接渲染缩略图
+        state.fileRenderCount = state.files.length;
         renderFileList();
         updateSearchBtn();
       };
@@ -164,6 +172,7 @@
     $('#fileList').hidden = total === 0;
     state.files.slice(0, shown).forEach((f, idx) => grid.appendChild(buildFileItem(f, idx, () => {
       state.files.splice(idx, 1);
+      state.fileRenderCount = Math.min(state.fileRenderCount, state.files.length);
       renderFileList();
       updateSearchBtn();
     })));
@@ -190,26 +199,33 @@
   function setupUrlPanel() {
     const ta = $('#urlTextarea');
     const fileInput = $('#urlFileInput');
-    on(ta, 'input', () => { clearTimeout(state._urlTimer); state._urlTimer = setTimeout(previewUrls, 300); });
-    on(ta, 'paste', () => { clearTimeout(state._urlTimer); state._urlTimer = setTimeout(previewUrls, 100); });
+    on(ta, 'input', () => { clearTimeout(state._urlTimer); state._urlTimer = setTimeout(parseUrls, 300); });
+    on(ta, 'paste', () => { clearTimeout(state._urlTimer); state._urlTimer = setTimeout(parseUrls, 100); });
     on(fileInput, 'change', async (e) => {
       const f = e.target.files[0];
       if (!f) return;
       const text = await f.text();
       ta.value = text;
-      previewUrls();
+      parseUrls();
     });
-    on($('#clearUrlBtn'), 'click', () => { ta.value = ''; state.urls = []; renderUrlGrid(); });
-    on($('#previewUrlBtn'), 'click', previewUrls);
+    on($('#clearUrlBtn'), 'click', () => { ta.value = ''; state.urls = []; $('#urlPreview').hidden = true; parseUrls(); });
+    on($('#previewUrlBtn'), 'click', () => { parseUrls(); renderUrlGrid(); $('#urlPreview').hidden = state.urls.length === 0; });
   }
-  async function previewUrls() {
+
+  // 解析 URL，只更新 state 和按钮状态，不渲染图片
+  function parseUrls() {
     const lines = $('#urlTextarea').value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     const valid = lines.filter((u) => /^https?:\/\//i.test(u));
     state.urls = valid.map((url) => ({ url, status: 'pending' }));
-    $('#urlPreview').hidden = valid.length === 0;
     $('#urlCount').textContent = `${valid.length} 条`;
-    renderUrlGrid();
     updateSearchBtn();
+  }
+
+  // 预览 URL 图片网格（仅用户点"预览链接"时调用）
+  function previewUrls() {
+    parseUrls();
+    renderUrlGrid();
+    $('#urlPreview').hidden = state.urls.length === 0;
   }
   function renderUrlGrid() {
     const grid = $('#urlGrid');
@@ -240,6 +256,7 @@
     on($('#clearTableBtn'), 'click', () => {
       state.tableUrls = [];
       $('#tableFileInfo').hidden = true;
+      $('#tablePreview').hidden = true;
       $('#tableFileInput').value = '';
       updateSearchBtn();
     });
@@ -248,6 +265,20 @@
       const valid = lines.filter((u) => /^https?:\/\//i.test(u));
       state.tableUrls = valid.map((url) => ({ url, status: 'pending' }));
       $('#tableUrlCount').textContent = `${valid.length} 条链接`;
+      // 如果预览区已打开，刷新预览
+      if (!$('#tablePreview').hidden) {
+        renderTableGrid();
+      }
+      updateSearchBtn();
+    });
+    on($('#previewTableBtn'), 'click', () => {
+      // 先确保数据是最新的（从 textarea 读取）
+      const lines = $('#tableUrlTextarea').value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      const valid = lines.filter((u) => /^https?:\/\//i.test(u));
+      state.tableUrls = valid.map((url) => ({ url, status: 'pending' }));
+      $('#tableUrlCount').textContent = `${valid.length} 条链接`;
+      renderTableGrid();
+      $('#tablePreview').hidden = state.tableUrls.length === 0;
       updateSearchBtn();
     });
   }
@@ -281,6 +312,7 @@
 
       // 展示文件信息和识别到的链接
       $('#tableFileInfo').hidden = false;
+      $('#tablePreview').hidden = true; // 默认不显示预览
       $('#tableFileName').textContent = '📄 ' + file.name;
       $('#tableUrlCount').textContent = `${unique.length} 条链接`;
       const ta = $('#tableUrlTextarea');
@@ -293,6 +325,32 @@
     }
   }
 
+  // 渲染表格面板预览网格
+  function renderTableGrid() {
+    const grid = $('#tableGrid');
+    grid.innerHTML = '';
+    (state.tableUrls || []).forEach((u, idx) => {
+      const el = h('div', { class: 'file-item' });
+      el.appendChild(h('img', { src: u.url, alt: u.url, loading: 'lazy' }));
+      el.appendChild(h('div', { class: 'file-item-name', title: u.url }, u.url.slice(0, 40) + (u.url.length > 40 ? '…' : '')));
+      const rm = h('button', { class: 'file-item-remove' }, '×');
+      on(rm, 'click', (e) => {
+        e.stopPropagation();
+        state.tableUrls.splice(idx, 1);
+        // 同步更新 textarea
+        $('#tableUrlTextarea').value = state.tableUrls.map((u) => u.url).join('\n');
+        $('#tableUrlCount').textContent = `${state.tableUrls.length} 条链接`;
+        renderTableGrid();
+        if (state.tableUrls.length === 0) {
+          $('#tablePreview').hidden = true;
+        }
+        updateSearchBtn();
+      });
+      el.appendChild(rm);
+      grid.appendChild(el);
+    });
+  }
+
   // ============== Search Btn ==============
   function getCurrentFileCount() {
     if (state.activeTab === 'batch') return state.files.length;
@@ -301,6 +359,8 @@
   }
   function updateSearchBtn() {
     $('#searchBtn').disabled = getCurrentFileCount() === 0 || state.isSearching;
+    // 清空按钮只在当前 tab 有数据时显示
+    $('#clearBtn').hidden = state.isSearching || getCurrentFileCount() === 0;
   }
 
   // ============== Search Flow ==============
@@ -310,8 +370,10 @@
     state.taskId = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID().replace(/-/g, '').slice(0, 16)
       : Math.random().toString(36).slice(2, 18);
+    registerOwnedTask(state.taskId);
     state.results = {};
     state.pollStartedAt = Date.now();
+    state.cancelRequested = false;
     updateSearchBtn();
 
     $('#progress-section').hidden = false;
@@ -328,6 +390,10 @@
     $('#imageStatusList').innerHTML = '';
     $('#imageStatusSection').hidden = false;
     $('#imageStatusSummary').textContent = '0/0 已完成';
+    // 显示停止按钮
+    $('#cancelBtn').hidden = false;
+    $('#cancelBtn').disabled = false;
+    $('#cancelBtn').textContent = '⏹ 停止任务';
     $('#result-section').hidden = true;
 
     const t0 = Date.now();
@@ -363,6 +429,7 @@
         }
       } else {
         // table: 从 Excel/CSV 识别的 URL，走 URL 上传流程
+        endpoint = `${state.apiBase}/api/upload_urls`;
         const allUrls = (state.tableUrls || []).map((u) => u.url);
         const first = allUrls.slice(0, CHUNK_SIZE);
         await fetchWithRetry(endpoint, {
@@ -412,8 +479,16 @@
       applyProgress(json);
       if (json.status === 'completed' || json.status === 'failed') {
         stopPolling();
-        if (json.status === 'completed') await loadResults();
+        $('#cancelBtn').hidden = true;
+        const wasCancelled = state.cancelRequested;
+        state.cancelRequested = false;
         state.isSearching = false;
+        if (json.status === 'completed' && !wasCancelled) await loadResults();
+        else if (wasCancelled) {
+          $('#progressStatus').textContent = '⏹ 已停止任务';
+          // 已停止时仍展示已完成的图片结果（如果有）
+          try { await loadResults(); } catch {}
+        }
         updateSearchBtn();
       }
     } catch (e) {
@@ -661,9 +736,20 @@
   }
   function newSearch() {
     cleanupCurrentTask();
-    state.files = []; state.urls = []; state.tableRows = [];
-    for (let i = 0; i < 3; i++) addTableRow();
-    renderFileList(); renderUrlGrid(); renderTable();
+    state.files = [];
+    state.urls = [];
+    state.tableUrls = [];
+    $('#urlTextarea').value = '';
+    $('#urlCount').textContent = '0 条';
+    $('#urlPreview').hidden = true;
+    $('#urlGrid').innerHTML = '';
+    $('#tableFileInput').value = '';
+    $('#tableFileInfo').hidden = true;
+    $('#tableUrlTextarea').value = '';
+    $('#tableUrlCount').textContent = '0 条链接';
+    $('#tablePreview').hidden = true;
+    $('#tableGrid').innerHTML = '';
+    renderFileList();
     $('#uploadTiming').hidden = true;
     $('#result-section').hidden = true;
     $('#progress-section').hidden = true;
@@ -680,16 +766,74 @@
     try { await fetch(`${state.apiBase}/api/tasks/${state.taskId}/cancel`, { method: 'POST' }); } catch {}
   }
 
+  async function cancelCurrentTask() {
+    if (!state.taskId || !state.isSearching) return;
+    state.cancelRequested = true;
+    const btn = $('#cancelBtn');
+    btn.disabled = true;
+    btn.textContent = '⏳ 正在停止...';
+    $('#progressStatus').textContent = '⏳ 正在停止任务...';
+    try {
+      await fetch(`${state.apiBase}/api/tasks/${state.taskId}/cancel`, { method: 'POST' });
+    } catch (e) {
+      console.warn('cancel failed:', e);
+    }
+    // 后端主循环检测到 canceled 会跳出，polling 检测到 status=failed 后会自动收尾
+  }
+
+  function clearCurrentTab() {
+    if (state.activeTab === 'batch') {
+      if (state.files.length === 0) return;
+      state.files = [];
+      state.fileRenderCount = 0;
+      renderFileList();
+    } else if (state.activeTab === 'link') {
+      if (state.urls.length === 0) return;
+      state.urls = [];
+      $('#urlTextarea').value = '';
+      $('#urlCount').textContent = '0 条';
+      $('#urlPreview').hidden = true;
+      $('#urlGrid').innerHTML = '';
+    } else if (state.activeTab === 'table') {
+      if ((state.tableUrls || []).length === 0) return;
+      state.tableUrls = [];
+      $('#tableFileInput').value = '';
+      $('#tableFileInfo').hidden = true;
+      $('#tablePreview').hidden = true;
+      $('#tableUrlTextarea').value = '';
+      $('#tableUrlCount').textContent = '0 条链接';
+      $('#tableGrid').innerHTML = '';
+    }
+    updateSearchBtn();
+  }
+
   // ============== Lifecycle ==============
+  function registerOwnedTask(taskId) {
+    if (!taskId) return;
+    state.ownedTaskIds.add(taskId);
+    sessionStorage.setItem('ownedTaskIds', JSON.stringify(Array.from(state.ownedTaskIds)));
+  }
+  function cleanupOwnedTasks() {
+    const ids = Array.from(state.ownedTaskIds);
+    if (!ids.length) return;
+    // sendBeacon 不支持 body，所以用 fetch keepalive 来发 POST
+    const body = JSON.stringify({ taskIds: ids });
+    try {
+      fetch(`${state.apiBase}/api/cleanup_batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        keepalive: true,
+      }).catch(() => {});
+    } catch {}
+    // 立刻清空 sessionStorage 避免重复清理
+    state.ownedTaskIds.clear();
+    sessionStorage.removeItem('ownedTaskIds');
+  }
   function setupLifecycle() {
-    // 页面关闭时：清理当前任务文件 + 全局清理所有 uploads
-    window.addEventListener('beforeunload', () => {
-      try { navigator.sendBeacon(`${state.apiBase}/api/cleanup`); } catch {}
-    });
-    // 页面刷新前也触发清理
-    window.addEventListener('pagehide', () => {
-      try { navigator.sendBeacon(`${state.apiBase}/api/cleanup`); } catch {}
-    });
+    // 关闭 tab/整个浏览器时，清理本 tab 创建/访问过的所有 task 文件
+    // 用 pagehide + fetch keepalive 比 sendBeacon 更可靠（支持 POST body）
+    window.addEventListener('pagehide', () => { cleanupOwnedTasks(); });
   }
 
   // ============== Init ==============
@@ -706,7 +850,8 @@
     setupLifecycle();
     $$('.upload-tab').forEach((b) => on(b, 'click', () => switchTab(b.dataset.tab)));
     on($('#searchBtn'), 'click', startSearch);
-    on($('#clearBtn'), 'click', () => { state.files = []; renderFileList(); updateSearchBtn(); });
+    on($('#cancelBtn'), 'click', cancelCurrentTask);
+    on($('#clearBtn'), 'click', clearCurrentTab);
     on($('#exportJsonBtn'), 'click', exportJson);
     on($('#newSearchBtn'), 'click', newSearch);
     on($('#loadMoreFilesBtn'), 'click', () => { state.fileRenderCount += FILE_RENDER_BATCH; renderFileList(); });
