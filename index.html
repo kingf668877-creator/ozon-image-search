@@ -5,17 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OZON 图搜批量寻源 · 以图搜款找爆品</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23005bff'/%3E%3Ctext x='32' y='42' font-size='32' font-weight='800' font-family='Inter,sans-serif' fill='white' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="css/style.css?v=20260813e">
+  <link rel="stylesheet" href="css/style.css?v=20260814a">
 </head>
 <body>
-  <!-- 背景装饰 -->
   <div class="bg-decoration">
     <div class="bg-circle bg-circle-1"></div>
     <div class="bg-circle bg-circle-2"></div>
     <div class="bg-grid"></div>
   </div>
 
-  <!-- 顶部导航 -->
   <header class="header">
     <div class="container header-inner">
       <div class="logo">
@@ -37,7 +35,6 @@
   <main class="main">
     <div class="container">
 
-      <!-- Hero 区 -->
       <section class="hero">
         <div class="hero-content">
           <div class="hero-badge"><span class="badge-dot"></span>视觉搜索引擎 · 批量找爆品</div>
@@ -45,10 +42,10 @@
             上传图片，<span class="gradient-text">一键搜遍 OZON 同款</span>
           </h1>
           <div class="api-notice" id="apiNotice">
-            <span class="notice-icon">🔧</span>
-            <span class="notice-text">首次使用请先启动后端服务 <code class="inline-code">node server.js</code>，然后配置后端地址</span>
-            <button class="notice-close" id="noticeClose">×</button>
-          </div>
+              <span class="notice-icon">🔧</span>
+              <span class="notice-text">首次使用请先启动后端服务 <code class="inline-code">node server.js</code>，然后配置后端地址</span>
+              <button class="notice-close" id="noticeClose">×</button>
+            </div>
           <div class="hero-stats">
             <div class="hero-stat"><span class="stat-num">600万+</span><span class="stat-label">OZON 商品池</span></div>
             <div class="hero-stat-divider"></div>
@@ -59,7 +56,6 @@
         </div>
       </section>
 
-      <!-- 上传卡片 -->
       <section class="upload-section" id="upload-section">
         <div class="card upload-card">
           <div class="card-header">
@@ -73,7 +69,6 @@
             <button class="upload-tab" data-tab="table">📋 表格批量上传</button>
           </div>
 
-          <!-- 批量上传面板 -->
           <div class="upload-panel" id="panel-batch">
             <div class="drop-zone" id="dropZone">
               <svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
@@ -96,7 +91,6 @@
             </div>
           </div>
 
-          <!-- URL 面板 -->
           <div class="upload-panel active" id="panel-link">
             <p class="panel-hint">每行粘贴一个图片 URL 地址，支持 http/https 链接，不限数量</p>
             <textarea id="urlTextarea" rows="8" placeholder="https://example.com/img1.jpg
@@ -120,7 +114,6 @@ https://example.com/img3.webp
             </div>
           </div>
 
-          <!-- 表格面板 -->
           <div class="upload-panel" id="panel-table">
             <p class="panel-hint">上传 Excel (.xlsx/.xls) 或 CSV 文件，自动识别表格中的图片链接</p>
             <div class="drop-zone" id="tableDropZone">
@@ -160,7 +153,6 @@ https://example.com/img3.webp
         </div>
       </section>
 
-      <!-- 进度卡片 -->
       <section class="progress-section" id="progress-section" hidden>
         <div class="card progress-card">
           <div class="card-header">
@@ -191,7 +183,6 @@ https://example.com/img3.webp
         </div>
       </section>
 
-      <!-- 结果区 -->
       <section class="result-section" id="result-section" hidden>
         <div class="result-header">
           <div class="result-title-wrap">
@@ -226,7 +217,6 @@ https://example.com/img3.webp
     </div>
   </main>
 
-  <!-- 页脚 -->
   <footer class="footer">
     <div class="container">
       <div class="footer-brand">
@@ -242,7 +232,6 @@ https://example.com/img3.webp
     </div>
   </footer>
 
-  <!-- 设置弹窗 -->
   <div class="settings-modal" id="settingsModal" hidden>
     <div class="settings-overlay" id="settingsOverlay"></div>
     <div class="settings-panel">
@@ -270,7 +259,6 @@ https://example.com/img3.webp
     </div>
   </div>
 
-  <!-- 商品结果弹窗 -->
   <div class="result-modal" id="resultModal" hidden>
     <div class="result-modal-overlay" id="resultModalOverlay"></div>
     <div class="result-modal-panel">
@@ -290,7 +278,6 @@ https://example.com/img3.webp
     </div>
   </div>
 
-  <!-- 商品卡模板 -->
   <template id="productCardTemplate">
     <a class="product-card" href="#" target="_blank">
       <div class="product-img">
@@ -305,7 +292,6 @@ https://example.com/img3.webp
     </a>
   </template>
 
-  <!-- 迷你商品卡模板 -->
   <template id="miniCardTemplate">
     <a class="mini-card" href="#" target="_blank">
       <div class="mini-img">
@@ -321,6 +307,6 @@ https://example.com/img3.webp
   </template>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="js/app.js?v=20260813l"></script>
+  <script src="js/app.js?v=20260814a"></script>
 </body>
 </html>
