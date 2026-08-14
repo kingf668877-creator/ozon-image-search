@@ -22,6 +22,62 @@ let lastRequestAt = 0;
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+/**
+ * Detect MIME + width/height from a raw image buffer.
+ * OZON's searchByImageUpload endpoint validates sourceMetadata against the
+ * actual image dimensions, so we must report real values.
+ */
+function detectImageMeta(buf, fileName) {
+  let mimeType = 'image/jpeg';
+  const ext = (fileName || '').toLowerCase().split('.').pop();
+  if (ext === 'png') mimeType = 'image/png';
+  else if (ext === 'webp') mimeType = 'image/webp';
+  else if (ext === 'gif') mimeType = 'image/gif';
+
+  let width = 1024;
+  let height = 1024;
+  try {
+    if (buf.length >= 24 && buf[0] === 0x89 && buf[1] === 0x50) {
+      mimeType = 'image/png';
+      width = buf.readUInt32BE(16);
+      height = buf.readUInt32BE(20);
+    } else if (buf.length >= 26 && buf[0] === 0xff && buf[1] === 0xd8) {
+      mimeType = 'image/jpeg';
+      let off = 2;
+      while (off < buf.length) {
+        if (buf[off] !== 0xff) { off += 1; continue; }
+        const marker = buf[off + 1];
+        const segLen = buf.readUInt16BE(off + 2);
+        const isSof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+        if (isSof) {
+          height = buf.readUInt16BE(off + 5);
+          width = buf.readUInt16BE(off + 7);
+          break;
+        }
+        off += 2 + segLen;
+      }
+    } else if (buf.length >= 30 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') {
+      mimeType = 'image/webp';
+      const vp8 = buf.toString('ascii', 12, 16);
+      if (vp8 === 'VP8 ') {
+        const w = buf.readUInt16LE(26) & 0x3fff;
+        const h = buf.readUInt16LE(28) & 0x3fff;
+        width = w; height = h;
+      }
+    } else if (buf.length >= 10) {
+      const sig = buf.toString('ascii', 0, 6);
+      if (sig === 'GIF87a' || sig === 'GIF89a') {
+        mimeType = 'image/gif';
+        width = buf.readUInt16LE(6);
+        height = buf.readUInt16LE(8);
+      }
+    }
+  } catch (_) { /* keep defaults */ }
+
+  if (!width || !height) { width = 1024; height = 1024; }
+  return { mimeType, width, height };
+}
+
 function httpJson(url) {
   return new Promise((resolve, reject) => {
     http.get(url, (res) => {
@@ -126,18 +182,28 @@ async function throttle() {
 
 async function uploadViaBrowser(handle, fileBuffer, fileName) {
   const b64 = Buffer.from(fileBuffer).toString('base64');
+  // Detect real mime + dimensions server-side from the buffer, so sourceMetadata matches.
+  const { mimeType, width, height } = detectImageMeta(fileBuffer, fileName);
+  const sourceMetadata = JSON.stringify({ width, height, type: mimeType });
   const expr = `
     (async () => {
       try {
         const bin = atob(${JSON.stringify(b64)});
         const bytes = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        const blob = new Blob([bytes], { type: 'image/jpeg' });
+        const blob = new Blob([bytes], { type: ${JSON.stringify(mimeType)} });
         const fd = new FormData();
         fd.append('file', blob, ${JSON.stringify(fileName || 'upload.jpg')});
-        fd.append('sourceMetadata', JSON.stringify({ width: 1024, height: 1024, type: 'image/jpeg' }));
+        fd.append('sourceMetadata', ${JSON.stringify(sourceMetadata)});
         const upRes = await fetch('/api/composer-api.bx/_action/searchByImageUpload', {
-          method: 'POST', body: fd, credentials: 'include'
+          method: 'POST',
+          body: fd,
+          credentials: 'include',
+          headers: {
+            // Force a normal browser-style referer to defeat anti-bot checks.
+            'Origin': window.location.origin,
+            'Referer': window.location.origin + '/',
+          },
         });
         const text = await upRes.text().catch(() => '');
         let json = {};
