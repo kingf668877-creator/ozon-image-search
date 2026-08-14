@@ -413,7 +413,7 @@ const SEARCH_API_PATH = '/api/entrypoint-api.bx/page/json/v2';
 
 async function searchByImageApi(handle, imageId) {
   const searchPath = '/search-by-image?image_id=' + imageId;
-  const expr = `
+  const expr = String.raw`
     (async () => {
       try {
         const apiUrl = ${JSON.stringify(SEARCH_API_PATH)} + '?url=' + encodeURIComponent(${JSON.stringify(searchPath)});
@@ -458,6 +458,19 @@ async function searchByImageApi(handle, imageId) {
                 if (!rating && ratingMatch) rating = ratingMatch[1];
                 var reviewMatch = text.match(/([\d\s\u00a0]+)\s*(?:отзыв(?:а|ов)?|оцен(?:ка|ок)?)/i);
                 if (!reviews && reviewMatch) reviews = reviewMatch[1].replace(/[^\d]/g, '');
+              }
+              if (st.type === 'labelListV2' && st.labelListV2 && Array.isArray(st.labelListV2.items)) {
+                var labels = st.labelListV2.items;
+                for (var l = 0; l < labels.length; l++) {
+                  var labelText = labels[l] && labels[l].text;
+                  if (labelText && typeof labelText === 'object') labelText = labelText.text;
+                  if (!labelText) continue;
+                  labelText = String(labelText).trim();
+                  if (!rating && /^\d[.,]\d+$/.test(labelText)) rating = labelText;
+                  if (!reviews && /\d/.test(labelText) && /отзыв(?:а|ов)?/i.test(labelText)) {
+                    reviews = labelText.replace(/[^\d]/g, '');
+                  }
+                }
               }
               if (st.type === 'rating' || st.rating) {
                 var ratingState = st.rating || st;
