@@ -70,6 +70,10 @@ async function runSearchHttp(img) {
       imageId: r.imageId,
       redirectUri: r.redirectUri,
       meta: { method: 'http' },
+      upload_seconds: r.upload_seconds,
+      search_seconds: r.search_seconds,
+      total_seconds: r.total_seconds,
+      search_attempts: r.search_attempts,
     };
   } catch (e) {
     return { ok: false, error: e.message, code: e.code, status: e.status };
@@ -150,6 +154,10 @@ async function startSearch(taskId) {
             imageId: r.imageId,
             redirectUri: r.redirectUri,
             meta: r.meta,
+            upload_seconds: r.upload_seconds,
+            search_seconds: r.search_seconds,
+            total_seconds: r.total_seconds,
+            search_attempts: r.search_attempts,
           };
           img.status = products.length ? 'completed' : 'no_results';
         } else {
@@ -466,6 +474,10 @@ app.get('/api/status/:taskId', (req, res) => {
       status: img.status,
       result_count: (t.results[img.name] || {}).result_count || 0,
       search_time: (t.results[img.name] || {}).search_time || 0,
+      upload_seconds: (t.results[img.name] || {}).upload_seconds || 0,
+      search_seconds: (t.results[img.name] || {}).search_seconds || 0,
+      total_seconds: (t.results[img.name] || {}).total_seconds || 0,
+      search_attempts: (t.results[img.name] || {}).search_attempts || 0,
       error: (t.results[img.name] || {}).error || null,
     })),
   });

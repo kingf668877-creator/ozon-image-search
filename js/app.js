@@ -664,7 +664,12 @@
     $('#resultModalThumb').src = `${state.apiBase}/uploads/${state.taskId}/${encodeURIComponent(imgName)}`;
     $('#resultModalTitle').textContent = imgName;
     const items = (entry.results || []).slice().sort((a, b) => (a.rank || 0) - (b.rank || 0));
-    $('#resultModalSub').textContent = `共 ${items.length} 个结果 · 耗时 ${(entry.search_time || 0).toFixed(1)}秒`;
+    // 展示分阶段耗时：上传 / 图搜 / 总计
+    const upS = entry.upload_seconds != null ? entry.upload_seconds : 0;
+    const srS = entry.search_seconds != null ? entry.search_seconds : (entry.search_time || 0);
+    const totalS = entry.total_seconds != null ? entry.total_seconds : (entry.search_time || 0);
+    const durText = `上传 ${upS.toFixed(1)}s · 搜索 ${srS.toFixed(1)}s · 总计 ${totalS.toFixed(1)}s`;
+    $('#resultModalSub').textContent = `共 ${items.length} 个结果 · ${durText}`;
     const grid = $('#resultModalGrid');
     grid.innerHTML = '';
     items.forEach((it, i) => grid.appendChild(buildFullCard(it, i + 1)));
