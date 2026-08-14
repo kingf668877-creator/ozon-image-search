@@ -483,176 +483,396 @@
         stopPolling();
         $('#cancelBtn').hidden = true;
         const wasCancelled = state.cancelRequested;
-        await loadResults();
+        state.cancelRequested = false;
         state.isSearching = false;
+        // 任务结束后一律请求结果并展示结果区，避免失败图片或零结果阻断已完成图片的结果展示。
+        await loadResults();
+        if (wasCancelled) $('#progressStatus').textContent = '⏹ 已停止任务';
         updateSearchBtn();
       }
     } catch (e) {
-      console.warn('poll failed', e);
+      console.warn('poll error:', e);
     }
   }
-
-  function applyProgress(p) {
-    if (!p) return;
-    const total = p.total || 0;
-    const current = p.current || 0;
-    const percent = total > 0 ? Math.round((current / total) * 100) : 0;
-    $('#progressCurrent').textContent = current;
+  function applyProgress(j) {
+    state.lastProgress = j;
+    const total = Number.isFinite(Number(j.total)) ? Number(j.total) : 0;
+    const cur = Number.isFinite(Number(j.current)) ? Number(j.current) : 0;
     $('#progressTotal').textContent = total;
-    $('#progressFill').style.width = percent + '%';
-    $('#progressPercent').textContent = percent + '%';
-    $('#progressStatus').textContent = p.message || p.status || '';
-    $('#foundProducts').textContent = (p.results_count || 0);
-    $('#imageStatusSummary').textContent = `${p.searched_count || 0}/${total} 已完成`;
-    if (p.currentImage) $('#currentImage').textContent = p.currentImage;
-    if (Array.isArray(p.image_statuses)) {
-      const list = $('#imageStatusList');
-      list.innerHTML = '';
-      p.image_statuses.forEach((s) => {
-        const item = h('div', { class: 'image-status-item' }, [
-          h('div', { class: 'image-status-thumb' }, [
-            h('img', { src: `/uploads/${state.taskId}/${encodeURIComponent(s.name)}`, alt: s.name, loading: 'lazy', onerror: (e) => { e.target.style.opacity = '0.3'; } })
-          ]),
-          h('div', { class: 'image-status-info' }, [
-            h('div', { class: 'image-status-name', title: s.name }, s.name.length > 40 ? s.name.slice(0, 40) + '…' : s.name),
-            h('div', { class: 'image-status-meta' }, [
-              h('span', { class: 'pill', 'data-status': s.status }, s.status),
-              h('span', {}, `${s.result_count} 个商品`),
-              s.error ? h('span', { class: 'err' }, s.error) : null,
-            ].filter(Boolean)),
-          ]),
-        ]);
-        list.appendChild(item);
-      });
+    $('#progressCurrent').textContent = cur;
+    const pct = total ? Math.round((cur / total) * 100) : 0;
+    $('#progressPercent').textContent = pct + '%';
+    $('#progressFill').style.width = pct + '%';
+    $('#progressStatus').textContent = j.message || j.status || '准备中';
+    // 状态接口只提供“已返回结果的图片数”，商品总数在结果接口中统一计算。
+    const completedImages = Number.isFinite(Number(j.results_count)) ? Number(j.results_count) : 0;
+    $('#foundProducts').textContent = completedImages;
+    if (total > 0 && cur > 0) {
+      const elapsed = (Date.now() - state.pollStartedAt) / 1000;
+      const avg = elapsed / cur;
+      const remain = avg * (total - cur);
+      $('#estimatedTime').textContent = fmtTime(remain);
     }
+    // 显示「搜索中：N/M 张」的进度式描述（分子=已完成数，随搜索推进 0→总数）
+    const imgStatuses = j.image_statuses || [];
+    const imgTotal = imgStatuses.length || j.total || 0;
+    let doneCount = 0;
+    imgStatuses.forEach((s) => {
+      if (s.status === 'completed' || s.status === 'no_results' || s.status === 'failed') doneCount++;
+    });
+    const statusLabel = (j.status === 'completed') ? '已完成' : '搜索中';
+    $('#currentImage').textContent = `${statusLabel}：${doneCount}/${imgTotal} 张`;
+    // 渲染状态列表
+    const list = $('#imageStatusList');
+    list.innerHTML = '';
+    let done = 0;
+    (j.image_statuses || []).forEach((s) => {
+      if (s.status === 'completed' || s.status === 'no_results' || s.status === 'failed') done++;
+      const labels = { pending: '等待中', searching: '搜索中', completed: '已完成', no_results: '无结果', failed: '失败' };
+      const row = h('div', { class: 'image-status-row' },
+        h('span', { class: 'name', title: s.name }, s.name),
+        h('span', { class: `status-badge ${s.status}` }, labels[s.status] || s.status),
+        s.result_count != null ? h('span', { class: 'meta-item' }, `${s.result_count} 个结果`) : null,
+      );
+      list.appendChild(row);
+    });
+    $('#imageStatusSummary').textContent = `${done}/${(j.image_statuses || []).length} 已完成`;
   }
 
+  // ============== Results ==============
   async function loadResults() {
     try {
-      const res = await fetchWithRetry(`${state.apiBase}/api/results/${state.taskId}`);
-      const json = await res.json();
-      state.results = json.results || {};
+      const res = await fetchWithRetry(`${state.apiBase}/api/results/${state.taskId}?limit=500&offset=0`, {}, 1);
+      const j = await res.json();
+      state.results = j.results || {};
       renderResults();
     } catch (e) {
-      console.error('load results failed', e);
+      console.error('loadResults error:', e);
     }
   }
 
   function renderResults() {
-    const container = $('#resultsGrid');
-    container.innerHTML = '';
-    const imageNames = Object.keys(state.results);
-    state.pagination.imageNames = imageNames;
-    state.pagination.totalItems = imageNames.length;
+    $('#result-section').hidden = false;
+    $('#result-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const names = Object.keys(state.results);
+    state.pagination.imageNames = names;
+    state.pagination.totalItems = names.length;
     state.pagination.currentPage = 1;
+    const totalProducts = Object.values(state.results).reduce((s, r) => s + (Number(r.result_count) || 0), 0);
+    // 结果接口返回后，用真实商品数覆盖轮询期间的“已完成图片数”。
+    $('#foundProducts').textContent = totalProducts;
+    const totalImages = names.length;
+    $('#resultSubtitle').textContent = `共搜索 ${totalImages} 张图片，找到 ${totalProducts} 个商品`;
+
+    // stats cards
+    const dur = state.lastProgress ? ((Date.now() - state.pollStartedAt) / 1000).toFixed(1) : '0';
+    $('#statsRow').innerHTML = '';
+    $('#statsRow').appendChild(makeStatsCard('搜索图片数', totalImages, false));
+    $('#statsRow').appendChild(makeStatsCard('找到商品数', totalProducts, true));
+    $('#statsRow').appendChild(makeStatsCard('平均结果/图', totalImages ? (totalProducts / totalImages).toFixed(1) : '0', false));
+    $('#statsRow').appendChild(makeStatsCard('接口总耗时', dur + '秒', false));
+
     renderPage();
-    $('#result-section').hidden = imageNames.length === 0;
+  }
+
+  function makeStatsCard(label, val, primary) {
+    return h('div', { class: 'stats-card' + (primary ? ' primary' : '') },
+      h('div', { class: 'stat-label' }, label),
+      h('div', { class: 'stat-value' }, String(val)),
+    );
   }
 
   function renderPage() {
-    const container = $('#resultsGrid');
-    container.innerHTML = '';
+    const list = $('#resultList');
+    list.innerHTML = '';
     const { currentPage, pageSize, imageNames } = state.pagination;
+    const total = imageNames.length;
+    if (total === 0) {
+      list.appendChild(h('div', { class: 'empty-state' },
+        h('div', { class: 'empty-state-icon' }, '🔍'),
+        h('p', {}, '未找到匹配的商品')));
+      $('#paginationWrap').hidden = true;
+      return;
+    }
     const start = (currentPage - 1) * pageSize;
-    const pageNames = imageNames.slice(start, start + pageSize);
-    pageNames.forEach((name) => {
-      const item = state.results[name];
-      if (!item) return;
-      const card = h('div', { class: 'result-card' });
-      card.appendChild(h('div', { class: 'result-thumb' }, [
-        h('img', { src: `/uploads/${state.taskId}/${encodeURIComponent(name)}`, alt: name, loading: 'lazy', onerror: (e) => { e.target.style.opacity = '0.3'; } })
-      ]));
-      const body = h('div', { class: 'result-body' }, [
-        h('div', { class: 'result-title', title: name }, name.length > 40 ? name.slice(0, 40) + '…' : name),
-        h('div', { class: 'result-meta' }, `${item.results.length} 个候选商品`),
-      ]);
-      card.appendChild(body);
-      const list = h('div', { class: 'product-list' });
-      (item.results || []).slice(0, 5).forEach((p) => {
-        list.appendChild(h('div', { class: 'product-item' }, [
-          h('img', { src: p.image, alt: p.title }),
-          h('div', { class: 'product-info' }, [
-            h('a', { href: p.url, target: '_blank', class: 'product-title' }, p.title || ''),
-            h('div', { class: 'product-price' }, p.price || '-'),
-            h('div', { class: 'product-rating' }, [
-              p.rating ? h('span', {}, `⭐ ${p.rating}`) : null,
-              p.reviews ? h('span', {}, `💬 ${p.reviews}`) : null,
-            ].filter(Boolean)),
-          ]),
-        ]));
-      });
-      card.appendChild(list);
-      container.appendChild(card);
+    const end = Math.min(start + pageSize, total);
+    const pageItems = imageNames.slice(start, end);
+    pageItems.forEach((imgName) => {
+      const entry = state.results[imgName] || {};
+      const items = (entry.results || []).slice().sort((a, b) => (a.rank || 0) - (b.rank || 0));
+      const row = h('div', { class: 'result-row' });
+      row.appendChild(h('div', { class: 'result-source' }, h('img', { src: `${state.apiBase}/uploads/${state.taskId}/${encodeURIComponent(imgName)}`, alt: imgName, loading: 'lazy' })));
+      const miniWrap = h('div', { class: 'result-mini-cards' });
+      items.slice(0, 5).forEach((it, i) => miniWrap.appendChild(buildMiniCard(it, i + 1)));
+      row.appendChild(miniWrap);
+      const moreWrap = h('div', { class: 'result-more' });
+      if (items.length > 5) {
+        const btn = h('button', { class: 'btn-view-more' }, `查看更多 +${items.length - 5}`);
+        on(btn, 'click', () => openResultModal(imgName, entry));
+        moreWrap.appendChild(btn);
+      }
+      const btnAll = h('button', { class: 'btn-view-more' }, '查看全部');
+      on(btnAll, 'click', () => openResultModal(imgName, entry));
+      moreWrap.appendChild(btnAll);
+      row.appendChild(moreWrap);
+      list.appendChild(row);
     });
-    $('#pageInfo').textContent = `第 ${currentPage} / ${Math.max(1, Math.ceil(imageNames.length / pageSize))} 页`;
+    $('#paginationWrap').hidden = total <= pageSize;
+    $('#paginationInfo').textContent = `第 ${start + 1}-${end} 条，共 ${total} 条`;
+    $('#pageCurrentNum').textContent = currentPage;
+    $('#pageTotalNum').textContent = Math.max(1, Math.ceil(total / pageSize));
+    $('#pagePrev').disabled = currentPage <= 1;
+    $('#pageNext').disabled = currentPage >= Math.ceil(total / pageSize);
+    $('#pageFirst').disabled = currentPage <= 1;
+    $('#pageLast').disabled = currentPage >= Math.ceil(total / pageSize);
   }
 
-  function nextPage() {
-    const total = Math.ceil(state.pagination.totalItems / state.pagination.pageSize);
-    if (state.pagination.currentPage < total) {
-      state.pagination.currentPage += 1;
-      renderPage();
-    }
-  }
-  function prevPage() {
-    if (state.pagination.currentPage > 1) {
-      state.pagination.currentPage -= 1;
-      renderPage();
-    }
-  }
-
-  // ============== Cleanup ==============
-  function registerOwnedTask(taskId) {
-    state.ownedTaskIds.add(taskId);
-    try { sessionStorage.setItem('ownedTaskIds', JSON.stringify(Array.from(state.ownedTaskIds))); } catch {}
+  function buildMiniCard(item, rank) {
+    const tpl = $('#miniCardTemplate');
+    const node = tpl.content.firstElementChild.cloneNode(true);
+    node.href = item.url || '#';
+    node.querySelector('img').src = item.image || 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Crect width="100" height="100" fill="%23f5f7fb"/%3E%3Ctext x="50" y="55" text-anchor="middle" font-size="12" fill="%238b94b0"%3E无图%3C/text%3E%3C/svg%3E';
+    node.querySelector('.mini-title').textContent = item.title || '暂无标题';
+    node.querySelector('.mini-rank').textContent = '#' + rank;
+    node.querySelector('.mini-price').textContent = item.price ? `₽ ${item.price}` : '-';
+    const meta = node.querySelector('.mini-meta');
+    meta.innerHTML = '';
+    if (item.rating) meta.appendChild(h('span', { class: 'mini-meta-item' }, `⭐ ${item.rating}`));
+    if (item.reviews) meta.appendChild(h('span', { class: 'mini-meta-item' }, `💬 ${item.reviews} 条评价`));
+    return node;
   }
 
-  async function cancelTask() {
-    if (!state.taskId) return;
-    state.cancelRequested = true;
-    $('#cancelBtn').disabled = true;
+  function buildFullCard(item, rank) {
+    const tpl = $('#productCardTemplate');
+    const node = tpl.content.firstElementChild.cloneNode(true);
+    node.href = item.url || '#';
+    node.querySelector('img').src = item.image || 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Crect width="100" height="100" fill="%23f5f7fb"/%3E%3Ctext x="50" y="55" text-anchor="middle" font-size="12" fill="%238b94b0"%3E无图%3C/text%3E%3C/svg%3E';
+    node.querySelector('.product-title').textContent = item.title || '暂无标题';
+    node.querySelector('.product-price').textContent = item.price ? `₽ ${item.price}` : '-';
+    const meta = node.querySelector('.product-meta');
+    meta.innerHTML = '';
+    if (item.rating) meta.appendChild(h('span', { class: 'meta-item' }, `⭐ ${item.rating}`));
+    if (item.reviews) meta.appendChild(h('span', { class: 'meta-item' }, `💬 ${item.reviews} 条评价`));
+    if (item.rank) meta.appendChild(h('span', { class: 'meta-item' }, `#${item.rank}`));
+    const fill = node.querySelector('.similarity-fill');
+    const sim = item.similarity != null ? item.similarity : (item.rank ? Math.max(0, 1 - item.rank / 50) : 0.5);
+    fill.style.width = Math.max(10, Math.min(100, sim * 100)) + '%';
+    return node;
+  }
+
+  function openResultModal(imgName, entry) {
+    $('#resultModalThumb').src = `${state.apiBase}/uploads/${state.taskId}/${encodeURIComponent(imgName)}`;
+    $('#resultModalTitle').textContent = imgName;
+    const items = (entry.results || []).slice().sort((a, b) => (a.rank || 0) - (b.rank || 0));
+    $('#resultModalSub').textContent = `共 ${items.length} 个结果 · 耗时 ${(entry.search_time || 0).toFixed(1)}秒`;
+    const grid = $('#resultModalGrid');
+    grid.innerHTML = '';
+    items.forEach((it, i) => grid.appendChild(buildFullCard(it, i + 1)));
+    $('#resultModal').hidden = false;
+  }
+  function closeResultModal() { $('#resultModal').hidden = true; }
+
+  // ============== Pagination ==============
+  function setupPagination() {
+    on($('#pageFirst'), 'click', () => { state.pagination.currentPage = 1; renderPage(); });
+    on($('#pagePrev'),  'click', () => { if (state.pagination.currentPage > 1) state.pagination.currentPage--; renderPage(); });
+    on($('#pageNext'),  'click', () => { state.pagination.currentPage++; renderPage(); });
+    on($('#pageLast'),  'click', () => { state.pagination.currentPage = Math.ceil(state.pagination.totalItems / state.pagination.pageSize); renderPage(); });
+    on($('#pageJumpBtn'), 'click', () => {
+      const v = Number($('#pageJumpInput').value);
+      if (v >= 1 && v <= Math.ceil(state.pagination.totalItems / state.pagination.pageSize)) {
+        state.pagination.currentPage = v; renderPage();
+      }
+    });
+    on($('#pageSizeSelect'), 'change', (e) => { state.pagination.pageSize = Number(e.target.value); state.pagination.currentPage = 1; renderPage(); });
+  }
+
+  // ============== Settings ==============
+  function openSettings() {
+    $('#apiBaseInput').value = state.apiBase;
+    $('#settingsModal').hidden = false;
+    testConnection();
+  }
+  function closeSettings() { $('#settingsModal').hidden = true; }
+  async function testConnection() {
+    const dot = $('#connectionStatus .status-dot');
+    const text = $('#connectionStatus .status-text');
+    dot.className = 'status-dot checking';
+    text.textContent = '检测中...';
     try {
-      await fetchWithRetry(`${state.apiBase}/api/tasks/${state.taskId}/cancel`, { method: 'POST' });
-    } catch {}
+      const res = await fetch(`${state.apiBase}/api/tasks`, { method: 'GET' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      await res.json();
+      dot.className = 'status-dot success';
+      text.textContent = '连接成功';
+    } catch (e) {
+      dot.className = 'status-dot error';
+      text.textContent = '连接失败：' + e.message;
+    }
+  }
+  function setupSettings() {
+    on($('#settingsBtn'), 'click', openSettings);
+    on($('#settingsClose'), 'click', closeSettings);
+    on($('#settingsCancel'), 'click', closeSettings);
+    on($('#settingsSave'), 'click', () => {
+      const v = $('#apiBaseInput').value.trim();
+      if (v) { setApiBase(v); $('#settingsSave').textContent = '✓ 已保存'; setTimeout(() => $('#settingsSave').textContent = '保存设置', 1200); }
+    });
+    on($('#settingsOverlay'), 'click', closeSettings);
+    on(document, 'keydown', (e) => { if (e.key === 'Escape') { closeSettings(); closeResultModal(); } });
   }
 
-  async function cleanupTasks() {
+  // ============== Notice ==============
+  function setupNotice() {
+    on($('#noticeClose'), 'click', () => $('#apiNotice').hidden = true);
+    on($('#apiNotice'), 'click', (e) => { if (e.target.tagName === 'A') return; openSettings(); });
+  }
+
+  // ============== Result Modal ==============
+  function setupResultModal() {
+    on($('#resultModalClose'), 'click', closeResultModal);
+    on($('#resultModalOverlay'), 'click', closeResultModal);
+  }
+
+  // ============== Export / New ==============
+  function exportJson() {
+    const data = {
+      taskId: state.taskId,
+      totalImages: state.pagination.totalItems,
+      results: state.results,
+      exportedAt: new Date().toISOString(),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = h('a', { href: url, download: `OZON图搜结果_${state.taskId}.json` });
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+  function newSearch() {
+    cleanupCurrentTask();
+    state.files = [];
+    state.urls = [];
+    state.tableUrls = [];
+    $('#urlTextarea').value = '';
+    $('#urlCount').textContent = '0 条';
+    $('#urlPreview').hidden = true;
+    $('#urlGrid').innerHTML = '';
+    $('#tableFileInput').value = '';
+    $('#tableFileInfo').hidden = true;
+    $('#tableUrlTextarea').value = '';
+    $('#tableUrlCount').textContent = '0 条链接';
+    $('#tablePreview').hidden = true;
+    $('#tableGrid').innerHTML = '';
+    renderFileList();
+    $('#uploadTiming').hidden = true;
+    $('#result-section').hidden = true;
+    $('#progress-section').hidden = true;
+    state.isSearching = false;
+    updateSearchBtn();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+  async function cleanupCurrentTask() {
+    if (!state.taskId) return;
+    try {
+      // 用 sendBeacon 确保页面关闭时也能发出去
+      navigator.sendBeacon(`${state.apiBase}/api/cleanup/${state.taskId}`);
+    } catch {}
+    try { await fetch(`${state.apiBase}/api/tasks/${state.taskId}/cancel`, { method: 'POST' }); } catch {}
+  }
+
+  async function cancelCurrentTask() {
+    if (!state.taskId || !state.isSearching) return;
+    state.cancelRequested = true;
+    const btn = $('#cancelBtn');
+    btn.disabled = true;
+    btn.textContent = '⏳ 正在停止...';
+    $('#progressStatus').textContent = '⏳ 正在停止任务...';
+    try {
+      await fetch(`${state.apiBase}/api/tasks/${state.taskId}/cancel`, { method: 'POST' });
+    } catch (e) {
+      console.warn('cancel failed:', e);
+    }
+    // 后端主循环检测到 canceled 会跳出，polling 检测到 status=failed 后会自动收尾
+  }
+
+  function clearCurrentTab() {
+    if (state.activeTab === 'batch') {
+      if (state.files.length === 0) return;
+      state.files = [];
+      state.fileRenderCount = 0;
+      renderFileList();
+    } else if (state.activeTab === 'link') {
+      if (state.urls.length === 0) return;
+      state.urls = [];
+      $('#urlTextarea').value = '';
+      $('#urlCount').textContent = '0 条';
+      $('#urlPreview').hidden = true;
+      $('#urlGrid').innerHTML = '';
+    } else if (state.activeTab === 'table') {
+      if ((state.tableUrls || []).length === 0) return;
+      state.tableUrls = [];
+      $('#tableFileInput').value = '';
+      $('#tableFileInfo').hidden = true;
+      $('#tablePreview').hidden = true;
+      $('#tableUrlTextarea').value = '';
+      $('#tableUrlCount').textContent = '0 条链接';
+      $('#tableGrid').innerHTML = '';
+    }
+    updateSearchBtn();
+  }
+
+  // ============== Lifecycle ==============
+  function registerOwnedTask(taskId) {
+    if (!taskId) return;
+    state.ownedTaskIds.add(taskId);
+    sessionStorage.setItem('ownedTaskIds', JSON.stringify(Array.from(state.ownedTaskIds)));
+  }
+  function cleanupOwnedTasks() {
     const ids = Array.from(state.ownedTaskIds);
     if (!ids.length) return;
+    // sendBeacon 不支持 body，所以用 fetch keepalive 来发 POST
+    const body = JSON.stringify({ taskIds: ids });
     try {
-      await fetchWithRetry(`${state.apiBase}/api/cleanup_batch`, {
+      fetch(`${state.apiBase}/api/cleanup_batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskIds: ids }),
-      });
+        body,
+        keepalive: true,
+      }).catch(() => {});
     } catch {}
+    // 立刻清空 sessionStorage 避免重复清理
     state.ownedTaskIds.clear();
-    try { sessionStorage.removeItem('ownedTaskIds'); } catch {}
+    sessionStorage.removeItem('ownedTaskIds');
+  }
+  function setupLifecycle() {
+    // 关闭 tab/整个浏览器时，清理本 tab 创建/访问过的所有 task 文件
+    // 用 pagehide + fetch keepalive 比 sendBeacon 更可靠（支持 POST body）
+    window.addEventListener('pagehide', () => { cleanupOwnedTasks(); });
   }
 
-  // ============== 事件绑定 ==============
-  function bindEvents() {
+  // ============== Init ==============
+  function init() {
+    state.apiBase = getApiBase();
+    $('#apiBaseInput').value = state.apiBase;
+    setupBatchUpload();
+    setupUrlPanel();
+    setupTablePanel();
+    setupPagination();
+    setupSettings();
+    setupResultModal();
+    setupNotice();
+    setupLifecycle();
     $$('.upload-tab').forEach((b) => on(b, 'click', () => switchTab(b.dataset.tab)));
-    on($('#searchBtn'), 'click', () => startSearch());
-    on($('#cancelBtn'), 'click', () => cancelTask());
-    on($('#clearBtn'), 'click', () => {
-      if (state.activeTab === 'batch') state.files = [];
-      if (state.activeTab === 'link') { state.urls = []; $('#urlTextarea').value = ''; }
-      if (state.activeTab === 'table') { state.tableUrls = []; $('#tableUrlTextarea').value = ''; $('#tableFileInfo').hidden = true; $('#tablePreview').hidden = true; }
-      if (state.activeTab === 'batch') renderFileList();
-      if (state.activeTab === 'link') { $('#urlCount').textContent = '0 条'; $('#urlPreview').hidden = true; }
-      if (state.activeTab === 'table') { $('#tableUrlCount').textContent = '0 条链接'; }
-      updateSearchBtn();
-    });
-    on($('#nextPageBtn'), 'click', () => nextPage());
-    on($('#prevPageBtn'), 'click', () => prevPage());
-    window.addEventListener('beforeunload', () => cleanupTasks());
+    on($('#searchBtn'), 'click', startSearch);
+    on($('#cancelBtn'), 'click', cancelCurrentTask);
+    on($('#clearBtn'), 'click', clearCurrentTab);
+    on($('#exportJsonBtn'), 'click', exportJson);
+    on($('#newSearchBtn'), 'click', newSearch);
+    on($('#loadMoreFilesBtn'), 'click', () => { state.fileRenderCount += FILE_RENDER_BATCH; renderFileList(); });
+    state.fileRenderCount = FILE_RENDER_BATCH;
+    // 默认使用线上后端，设置弹窗仍允许手动覆盖。
   }
 
-  // ============== 启动 ==============
-  bindEvents();
-  setupBatchUpload();
-  setupUrlPanel();
-  setupTablePanel();
-  switchTab('link');
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
 })();
