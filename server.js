@@ -102,6 +102,22 @@ async function runSearch(img) {
 
 async function startSearch(taskId) {
   const task = getTask(taskId);
+  // Fail fast if CDP is down so the task doesn't pretend to run.
+  if (MODE === 'http') {
+    try {
+      const tabs = await ozonSearch.listTabs(CDP_PORT);
+      const ozonTabs = tabs.filter((t) => (t.url || '').includes('ozon.ru'));
+      if (!ozonTabs.length) {
+        task.status = 'failed';
+        task.message = 'Chrome 已就绪但缺少 OZON 标签页，请检查浏览器窗口';
+        return;
+      }
+    } catch (e) {
+      task.status = 'failed';
+      task.message = `Chrome 未运行或 CDP 不可达 (port ${CDP_PORT})，请启动 start-ozon-headless.ps1`;
+      return;
+    }
+  }
   task.search_started_at = Date.now();
   task.status = 'searching';
   task.message = `正在搜索 ${task.total} 张图片...`;
@@ -291,6 +307,25 @@ app.post('/api/upload/:taskId', upload.array('files', 200), (req, res) => {
   res.json({ success: true, task_id: task.taskId, uploaded_count: uploaded.length });
 });
 
+app.post('/api/upload_b64', async (req, res) => {
+  const { fileName, base64, auto_search = true, task_id } = req.body || {};
+  if (!fileName || !base64) return res.status(400).json({ success: false, error: 'fileName/base64 required' });
+  let buf;
+  try { buf = Buffer.from(base64, 'base64'); } catch (e) { return res.status(400).json({ success: false, error: 'invalid base64' }); }
+  if (!buf.length) return res.status(400).json({ success: false, error: 'empty file' });
+  const task = task_id ? getTask(task_id) : getTask(crypto.randomBytes(8).toString('hex'));
+  const safeName = String(Date.now()) + '_' + fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const dir = path.join(UPLOAD_DIR, task.taskId);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const diskPath = path.join(dir, safeName);
+  fs.writeFileSync(diskPath, buf);
+  task.images.push({ name: safeName, originalName: fileName, diskPath, status: 'downloaded', size: buf.length });
+  task.total = task.images.length;
+  task.status = 'queued';
+  res.json({ success: true, task_id: task.taskId, total_images: task.images.length });
+  if (auto_search) setImmediate(() => startSearch(task.taskId));
+});
+
 // 下载 URL 图片到本地，返回 diskPath；失败返回 null
 async function downloadUrlToLocal(url, taskId, idx) {
   try {
@@ -404,8 +439,10 @@ app.post('/api/upload_urls', async (req, res) => {
 app.post('/api/search/:taskId', (req, res) => {
   const task = getTask(req.params.taskId);
   if (!task.images.length) return res.status(400).json({ success: false, error: 'no_images' });
-  // 允许对已下载但尚未搜索的图片做增量搜索 / 重试
-  const pending = task.images.filter((i) => !i.diskPath || i.status === 'failed');
+  // 对任何有 diskPath 且尚未成功搜索的图触发 startSearch
+  const pending = task.images.filter(
+    (i) => i.diskPath && i.status !== 'completed' && i.status !== 'searching'
+  );
   if (!pending.length) {
     return res.json({ success: true, message: 'all_ready', ready: task.images.length });
   }
@@ -451,6 +488,7 @@ app.post('/api/tasks/:taskId/cancel', (req, res) => {
   res.json({ success: true });
 });
 
+// 清理所有上传文件和内存任务（页面关闭/刷新时调用）
 app.post('/api/cleanup', (req, res) => {
   cleanupUploads();
   clearAllTasks();
