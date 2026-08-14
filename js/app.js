@@ -400,6 +400,7 @@
 
     const t0 = Date.now();
     let endpoint, body;
+    startPolling();
     try {
       if (state.activeTab === 'batch') {
         endpoint = `${state.apiBase}/api/upload/${state.taskId}`;
@@ -410,50 +411,43 @@
         // 立刻触发搜索
         await fetchWithRetry(`${state.apiBase}/api/search/${state.taskId}`, { method: 'POST' });
       } else if (state.activeTab === 'link') {
-        // 分批流水线
+        // 分批串行下载，避免多个批次同时下载导致任务队列拥塞。
         endpoint = `${state.apiBase}/api/upload_urls`;
         const allUrls = state.urls.map((u) => u.url);
-        const first = allUrls.slice(0, CHUNK_SIZE);
-        await fetchWithRetry(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ urls: first, auto_search: true, task_id: state.taskId, is_last_batch: allUrls.length <= CHUNK_SIZE, expected_total: allUrls.length }),
-        });
-        // 后台继续传剩余
-        const rest = allUrls.slice(CHUNK_SIZE);
-        for (let i = 0; i < rest.length; i += CHUNK_SIZE) {
-          const batch = rest.slice(i, i + CHUNK_SIZE);
-          fetchWithRetry(endpoint, {
+        for (let i = 0; i < allUrls.length; i += CHUNK_SIZE) {
+          const batch = allUrls.slice(i, i + CHUNK_SIZE);
+          const isLast = i + batch.length >= allUrls.length;
+          await fetchWithRetry(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ urls: batch, auto_search: false, task_id: state.taskId, is_last_batch: i + batch.length >= rest.length, expected_total: allUrls.length }),
-          }).catch((e) => console.warn('chunk upload failed:', e));
+            body: JSON.stringify({ urls: batch, auto_search: isLast, task_id: state.taskId, is_last_batch: isLast, expected_total: allUrls.length }),
+          });
+          $('#progressStatus').textContent = `正在下载图片 ${Math.min(i + batch.length, allUrls.length)}/${allUrls.length}`;
+          $('#progressTotal').textContent = allUrls.length;
+          $('#progressCurrent').textContent = Math.min(i + batch.length, allUrls.length);
         }
       } else {
-        // table: 从 Excel/CSV 识别的 URL，走 URL 上传流程
+        // table: 从 Excel/CSV 识别的 URL，按批次串行下载。
         endpoint = `${state.apiBase}/api/upload_urls`;
         const allUrls = (state.tableUrls || []).map((u) => u.url);
-        const first = allUrls.slice(0, CHUNK_SIZE);
-        await fetchWithRetry(endpoint, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ urls: first, auto_search: true, task_id: state.taskId, is_last_batch: allUrls.length <= CHUNK_SIZE, expected_total: allUrls.length }),
-        });
-        const rest = allUrls.slice(CHUNK_SIZE);
-        for (let i = 0; i < rest.length; i += CHUNK_SIZE) {
-          const batch = rest.slice(i, i + CHUNK_SIZE);
-          fetchWithRetry(endpoint, {
+        for (let i = 0; i < allUrls.length; i += CHUNK_SIZE) {
+          const batch = allUrls.slice(i, i + CHUNK_SIZE);
+          const isLast = i + batch.length >= allUrls.length;
+          await fetchWithRetry(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ urls: batch, auto_search: false, task_id: state.taskId, is_last_batch: i + batch.length >= rest.length, expected_total: allUrls.length }),
-          }).catch((e) => console.warn('chunk upload failed:', e));
+            body: JSON.stringify({ urls: batch, auto_search: isLast, task_id: state.taskId, is_last_batch: isLast, expected_total: allUrls.length }),
+          });
+          $('#progressStatus').textContent = `正在下载图片 ${Math.min(i + batch.length, allUrls.length)}/${allUrls.length}`;
+          $('#progressTotal').textContent = allUrls.length;
+          $('#progressCurrent').textContent = Math.min(i + batch.length, allUrls.length);
         }
       }
       const seconds = ((Date.now() - t0) / 1000).toFixed(1);
       $('#uploadTiming').hidden = false;
       $('#timingVal').textContent = seconds;
-      startPolling();
     } catch (e) {
+      stopPolling();
       alert('上传失败：' + e.message);
       state.isSearching = false;
       updateSearchBtn();
@@ -515,7 +509,7 @@
     }
     // 显示「搜索中：N/M 张」的进度式描述（分子=已完成数，随搜索推进 0→总数）
     const imgStatuses = j.image_statuses || [];
-    const imgTotal = imgStatuses.length || j.total || 0;
+    const imgTotal = Number(j.image_statuses_total) || Number(j.total) || imgStatuses.length || 0;
     let doneCount = 0;
     imgStatuses.forEach((s) => {
       if (s.status === 'completed' || s.status === 'no_results' || s.status === 'failed') doneCount++;
@@ -528,7 +522,7 @@
     let done = 0;
     (j.image_statuses || []).forEach((s) => {
       if (s.status === 'completed' || s.status === 'no_results' || s.status === 'failed') done++;
-      const labels = { pending: '等待中', searching: '搜索中', completed: '已完成', no_results: '无结果', failed: '失败' };
+      const labels = { pending: '等待中', downloading: '下载中', downloaded: '已下载', searching: '搜索中', completed: '已完成', no_results: '无结果', failed: '失败' };
       const row = h('div', { class: 'image-status-row' },
         h('span', { class: 'name', title: s.name }, s.name),
         h('span', { class: `status-badge ${s.status}` }, labels[s.status] || s.status),
@@ -536,7 +530,8 @@
       );
       list.appendChild(row);
     });
-    $('#imageStatusSummary').textContent = `${done}/${(j.image_statuses || []).length} 已完成`;
+    const visibleNote = imgStatuses.length < imgTotal ? `（显示前 ${imgStatuses.length} 条）` : '';
+    $('#imageStatusSummary').textContent = `${Number(j.searched_count) || done}/${imgTotal} 已完成 ${visibleNote}`;
   }
 
   // ============== Results ==============

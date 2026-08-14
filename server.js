@@ -386,14 +386,16 @@ app.post('/api/upload_urls', async (req, res) => {
   } = req.body || {};
   const task = task_id ? getTask(task_id) : getTask(crypto.randomBytes(8).toString('hex'));
 
-  // 先把 items 加入 task
+  // 记录本批在任务中的真实起始位置，避免后续批次覆盖首批状态。
+  const batchStart = task.images.length;
   const items = urls.map((u) => ({ name: u, url: u, status: 'pending' }));
   task.images.push(...items);
-  task.total = task.images.length;
   if (typeof expected_total === 'number' && expected_total > 0) {
     task.expected_total = Math.max(task.expected_total || 0, expected_total);
   }
+  task.total = task.expected_total || task.images.length;
   task.status = 'downloading';
+  task.message = `正在下载图片 ${task.downloaded_count}/${task.total}`;
 
   // 先同步下载所有 URL 图片到本地（用于结果区展示缩略图 + 提供给 runSearch 走本地路径）
   // 限制并发数为 5，避免阻塞
@@ -403,9 +405,11 @@ app.post('/api/upload_urls', async (req, res) => {
   async function worker() {
     while (cursor < urls.length) {
       const i = cursor++;
+      const taskIndex = batchStart + i;
       const u = urls[i];
-      const img = task.images[i];
-      const r = await downloadUrlToLocal(u, task.taskId, i);
+      const img = task.images[taskIndex];
+      img.status = 'downloading';
+      const r = await downloadUrlToLocal(u, task.taskId, taskIndex);
       if (r.ok) {
         img.diskPath = r.diskPath;
         img.name = r.name;
@@ -416,6 +420,9 @@ app.post('/api/upload_urls', async (req, res) => {
         img.status = 'failed';
         errors.push({ url: u, error: r.error });
       }
+      task.downloaded_count += 1;
+      task.current = task.downloaded_count;
+      task.message = `正在下载图片 ${task.downloaded_count}/${task.total}`;
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, urls.length) }, () => worker()));
@@ -429,18 +436,16 @@ app.post('/api/upload_urls', async (req, res) => {
     batch_failed: errors.length,
   });
 
-  // 仅当本批下载完且（前端告知是最后一批 或 任务累计图片数等于预期总数）时才启动搜索
-  if (auto_search) {
+  const expected = task.expected_total || task.total;
+  const received = task.images.length;
+  if (auto_search && (is_last_batch || received >= expected)) {
     setImmediate(() => {
-      const expected = task.expected_total || task.total;
-      const ready = task.images.filter((i) => i.diskPath).length;
-      if (is_last_batch || ready >= expected) {
-        startSearch(task.taskId);
-      } else {
-        task.status = 'queued';
-        task.message = `已下载 ${ready}/${expected} 张图片，等待剩余批次`;
-      }
+      task.current = 0;
+      startSearch(task.taskId);
     });
+  } else {
+    task.status = 'queued';
+    task.message = `已下载 ${task.downloaded_count}/${expected} 张图片，等待剩余批次`;
   }
 });
 
@@ -469,7 +474,8 @@ app.get('/api/status/:taskId', (req, res) => {
     downloaded_count: t.downloaded_count,
     results_count: Object.keys(t.results).length,
     search_started_at: t.search_started_at,
-    image_statuses: t.images.map((img) => ({
+    image_statuses_total: t.images.length,
+    image_statuses: t.images.slice(0, 200).map((img) => ({
       name: img.name,
       status: img.status,
       result_count: (t.results[img.name] || {}).result_count || 0,
