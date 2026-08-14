@@ -56,9 +56,12 @@ function getTask(taskId) {
   return t;
 }
 
+// ============== 搜索执行 ==============
 async function runSearchHttp(img) {
-  const buf = img.diskPath ? fs.readFileSync(img.diskPath) : null;
-  if (!buf) return { ok: false, error: 'no_input' };
+  if (!img.diskPath || !fs.existsSync(img.diskPath)) {
+    return { ok: false, error: 'no_input', code: 'no_input' };
+  }
+  const buf = fs.readFileSync(img.diskPath);
   try {
     const r = await ozonHttp.searchByFile(buf, img.name);
     return {
@@ -170,6 +173,7 @@ async function startSearch(taskId) {
   task.message = task.canceled ? '已取消' : '完成';
 }
 
+// ============== Express ==============
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: '20mb' }));
@@ -287,6 +291,7 @@ app.post('/api/upload/:taskId', upload.array('files', 200), (req, res) => {
   res.json({ success: true, task_id: task.taskId, uploaded_count: uploaded.length });
 });
 
+// 下载 URL 图片到本地，返回 diskPath；失败返回 null
 async function downloadUrlToLocal(url, taskId, idx) {
   try {
     const dir = path.join(UPLOAD_DIR, taskId);
@@ -329,16 +334,29 @@ async function downloadUrlToLocal(url, taskId, idx) {
 }
 
 app.post('/api/upload_urls', async (req, res) => {
-  const { urls = [], auto_search = true, task_id } = req.body || {};
+  const {
+    urls = [],
+    auto_search = true,
+    task_id,
+    is_last_batch = true,
+    expected_total = null,
+  } = req.body || {};
   const task = task_id ? getTask(task_id) : getTask(crypto.randomBytes(8).toString('hex'));
 
+  // 先把 items 加入 task
   const items = urls.map((u) => ({ name: u, url: u, status: 'pending' }));
   task.images.push(...items);
   task.total = task.images.length;
-  task.status = 'queued';
+  if (typeof expected_total === 'number' && expected_total > 0) {
+    task.expected_total = Math.max(task.expected_total || 0, expected_total);
+  }
+  task.status = 'downloading';
 
+  // 先同步下载所有 URL 图片到本地（用于结果区展示缩略图 + 提供给 runSearch 走本地路径）
+  // 限制并发数为 5，避免阻塞
   const CONCURRENCY = 5;
   let cursor = 0;
+  const errors = [];
   async function worker() {
     while (cursor < urls.length) {
       const i = cursor++;
@@ -349,23 +367,50 @@ app.post('/api/upload_urls', async (req, res) => {
         img.diskPath = r.diskPath;
         img.name = r.name;
         img.originalName = u;
+        img.status = 'downloaded';
       } else {
         img.error = r.error;
+        img.status = 'failed';
+        errors.push({ url: u, error: r.error });
       }
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, urls.length) }, () => worker()));
 
-  res.json({ success: true, task_id: task.taskId, total_uploaded: items.length });
+  // 立即返回 task_id
+  res.json({
+    success: true,
+    task_id: task.taskId,
+    total_uploaded: items.length,
+    batch_downloaded: urls.length - errors.length,
+    batch_failed: errors.length,
+  });
 
-  if (auto_search) setImmediate(() => startSearch(task.taskId));
+  // 仅当本批下载完且（前端告知是最后一批 或 任务累计图片数等于预期总数）时才启动搜索
+  if (auto_search) {
+    setImmediate(() => {
+      const expected = task.expected_total || task.total;
+      const ready = task.images.filter((i) => i.diskPath).length;
+      if (is_last_batch || ready >= expected) {
+        startSearch(task.taskId);
+      } else {
+        task.status = 'queued';
+        task.message = `已下载 ${ready}/${expected} 张图片，等待剩余批次`;
+      }
+    });
+  }
 });
 
 app.post('/api/search/:taskId', (req, res) => {
   const task = getTask(req.params.taskId);
   if (!task.images.length) return res.status(400).json({ success: false, error: 'no_images' });
+  // 允许对已下载但尚未搜索的图片做增量搜索 / 重试
+  const pending = task.images.filter((i) => !i.diskPath || i.status === 'failed');
+  if (!pending.length) {
+    return res.json({ success: true, message: 'all_ready', ready: task.images.length });
+  }
   setImmediate(() => startSearch(task.taskId));
-  res.json({ success: true });
+  res.json({ success: true, pending: pending.length });
 });
 
 app.get('/api/status/:taskId', (req, res) => {
