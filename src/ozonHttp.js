@@ -13,7 +13,7 @@ const http = require('http');
 const { findOzonTab } = require('./ozonSession');
 const { parseProductsFromTileGrid } = require('./ozonParse');
 
-const DEFAULT_CONCURRENCY = Number(process.env.OZON_HTTP_CONCURRENCY || 10);
+const DEFAULT_CONCURRENCY = Number(process.env.OZON_HTTP_CONCURRENCY || 5);
 const MIN_INTERVAL_MS = Number(process.env.OZON_HTTP_MIN_INTERVAL_MS || 0);
 
 const handlePool = [];
