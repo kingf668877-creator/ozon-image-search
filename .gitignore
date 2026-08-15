@@ -19,6 +19,9 @@ search-page.html
 ozon-products*.json
 ozon-cookies.json
 uploads/
+data/*.sqlite
+
+data/*.sqlite-*
 
 # Logs
 *.log

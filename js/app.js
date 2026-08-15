@@ -473,7 +473,7 @@
       const res = await fetchWithRetry(`${state.apiBase}/api/status/${state.taskId}`, {}, 1);
       const json = await res.json();
       applyProgress(json);
-      if (json.status === 'completed' || json.status === 'failed') {
+      if (json.status === 'completed' || json.status === 'partial' || json.status === 'failed') {
         stopPolling();
         $('#cancelBtn').hidden = true;
         const wasCancelled = state.cancelRequested;
@@ -514,7 +514,7 @@
     imgStatuses.forEach((s) => {
       if (s.status === 'completed' || s.status === 'no_results' || s.status === 'failed') doneCount++;
     });
-    const statusLabel = (j.status === 'completed') ? '已完成' : '搜索中';
+    const statusLabel = j.status === 'completed' ? '已完成' : (j.status === 'partial' ? '部分完成' : '搜索中');
     $('#currentImage').textContent = `${statusLabel}：${doneCount}/${imgTotal} 张`;
     // 渲染状态列表
     const list = $('#imageStatusList');
@@ -535,11 +535,15 @@
   }
 
   // ============== Results ==============
-  async function loadResults() {
+  async function loadResults(page = 1) {
     try {
-      const res = await fetchWithRetry(`${state.apiBase}/api/results/${state.taskId}?limit=500&offset=0`, {}, 1);
+      const pageSize = state.pagination.pageSize;
+      const offset = (page - 1) * pageSize;
+      const res = await fetchWithRetry(`${state.apiBase}/api/results/${state.taskId}?limit=${pageSize}&offset=${offset}`, {}, 1);
       const j = await res.json();
       state.results = j.results || {};
+      state.resultMeta = j;
+      state.pagination.currentPage = page;
       renderResults();
     } catch (e) {
       console.error('loadResults error:', e);
@@ -550,14 +554,13 @@
     $('#result-section').hidden = false;
     $('#result-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
     const names = Object.keys(state.results);
+    const meta = state.resultMeta || {};
     state.pagination.imageNames = names;
-    state.pagination.totalItems = names.length;
-    state.pagination.currentPage = 1;
-    const totalProducts = Object.values(state.results).reduce((s, r) => s + (Number(r.result_count) || 0), 0);
-    // 结果接口返回后，用真实商品数覆盖轮询期间的“已完成图片数”。
+    state.pagination.totalItems = Number(meta.total_results) || names.length;
+    const totalProducts = Number(meta.total_products) || 0;
     $('#foundProducts').textContent = totalProducts;
-    const totalImages = names.length;
-    $('#resultSubtitle').textContent = `共搜索 ${totalImages} 张图片，找到 ${totalProducts} 个商品`;
+    const totalImages = state.pagination.totalItems;
+    $('#resultSubtitle').textContent = `已保存 ${totalImages} 张图片结果，找到 ${totalProducts} 个商品`;
 
     // stats cards
     const dur = state.lastProgress ? ((Date.now() - state.pollStartedAt) / 1000).toFixed(1) : '0';
@@ -580,9 +583,9 @@
   function renderPage() {
     const list = $('#resultList');
     list.innerHTML = '';
-    const { currentPage, pageSize, imageNames } = state.pagination;
-    const total = imageNames.length;
-    if (total === 0) {
+    const { currentPage, pageSize, imageNames, totalItems } = state.pagination;
+    const total = totalItems;
+    if (imageNames.length === 0) {
       list.appendChild(h('div', { class: 'empty-state' },
         h('div', { class: 'empty-state-icon' }, '🔍'),
         h('p', {}, '未找到匹配的商品')));
@@ -590,8 +593,8 @@
       return;
     }
     const start = (currentPage - 1) * pageSize;
-    const end = Math.min(start + pageSize, total);
-    const pageItems = imageNames.slice(start, end);
+    const end = Math.min(start + imageNames.length, total);
+    const pageItems = imageNames;
     pageItems.forEach((imgName) => {
       const entry = state.results[imgName] || {};
       const items = (entry.results || []).slice().sort((a, b) => (a.rank || 0) - (b.rank || 0));
@@ -674,17 +677,15 @@
 
   // ============== Pagination ==============
   function setupPagination() {
-    on($('#pageFirst'), 'click', () => { state.pagination.currentPage = 1; renderPage(); });
-    on($('#pagePrev'),  'click', () => { if (state.pagination.currentPage > 1) state.pagination.currentPage--; renderPage(); });
-    on($('#pageNext'),  'click', () => { state.pagination.currentPage++; renderPage(); });
-    on($('#pageLast'),  'click', () => { state.pagination.currentPage = Math.ceil(state.pagination.totalItems / state.pagination.pageSize); renderPage(); });
+    on($('#pageFirst'), 'click', () => loadResults(1));
+    on($('#pagePrev'), 'click', () => { if (state.pagination.currentPage > 1) loadResults(state.pagination.currentPage - 1); });
+    on($('#pageNext'), 'click', () => loadResults(state.pagination.currentPage + 1));
+    on($('#pageLast'), 'click', () => loadResults(Math.ceil(state.pagination.totalItems / state.pagination.pageSize)));
     on($('#pageJumpBtn'), 'click', () => {
       const v = Number($('#pageJumpInput').value);
-      if (v >= 1 && v <= Math.ceil(state.pagination.totalItems / state.pagination.pageSize)) {
-        state.pagination.currentPage = v; renderPage();
-      }
+      if (v >= 1 && v <= Math.ceil(state.pagination.totalItems / state.pagination.pageSize)) loadResults(v);
     });
-    on($('#pageSizeSelect'), 'change', (e) => { state.pagination.pageSize = Number(e.target.value); state.pagination.currentPage = 1; renderPage(); });
+    on($('#pageSizeSelect'), 'change', (e) => { state.pagination.pageSize = Number(e.target.value); loadResults(1); });
   }
 
   // ============== Settings ==============
@@ -821,6 +822,50 @@
     updateSearchBtn();
   }
 
+  // ============== Task History ==============
+  async function loadTaskHistory() {
+    const list = $('#historyList');
+    try {
+      const res = await fetch(`${state.apiBase}/api/tasks`);
+      const json = await res.json();
+      const tasks = json.tasks || [];
+      if (!tasks.length) { list.innerHTML = '<span class="muted">暂无历史任务</span>'; return; }
+      list.innerHTML = '';
+      tasks.slice(0, 30).forEach((task) => {
+        const statusText = { completed: '已完成', partial: '部分完成', failed: '失败', searching: '搜索中', downloading: '下载中', queued: '等待中' }[task.status] || task.status;
+        const row = h('div', { className: 'history-item' }, [
+          h('div', { className: 'history-info' }, [
+            h('strong', {}, task.taskId),
+            h('span', { className: `status-badge status-${task.status}` }, statusText),
+            h('span', { className: 'muted' }, `${task.searchedCount || task.current || 0}/${task.total || 0}`),
+          ]),
+          h('div', { className: 'history-actions' }, [
+            h('button', { className: 'btn btn-ghost btn-sm', onclick: () => openHistoryTask(task.taskId) }, '查看结果'),
+            h('button', { className: 'btn btn-outline btn-sm', onclick: () => resumeHistoryTask(task.taskId, false) }, '继续任务'),
+            h('button', { className: 'btn btn-outline btn-sm', onclick: () => resumeHistoryTask(task.taskId, true) }, '重试失败'),
+          ]),
+        ]);
+        list.appendChild(row);
+      });
+    } catch (e) { list.innerHTML = `<span class="muted">任务记录加载失败：${e.message}</span>`; }
+  }
+
+  async function openHistoryTask(taskId) {
+    state.taskId = taskId;
+    await loadResults();
+  }
+
+  async function resumeHistoryTask(taskId, failedOnly) {
+    state.taskId = taskId;
+    const endpoint = failedOnly ? `/api/tasks/${taskId}/retry-failed` : `/api/search/${taskId}`;
+    const res = await fetch(`${state.apiBase}${endpoint}`, { method: 'POST' });
+    const json = await res.json();
+    if (!res.ok) { alert(json.error || '任务启动失败'); return; }
+    state.isSearching = true;
+    $('#progress-section').hidden = false;
+    startPolling();
+  }
+
   // ============== Lifecycle ==============
   function registerOwnedTask(taskId) {
     if (!taskId) return;
@@ -845,9 +890,8 @@
     sessionStorage.removeItem('ownedTaskIds');
   }
   function setupLifecycle() {
-    // 关闭 tab/整个浏览器时，清理本 tab 创建/访问过的所有 task 文件
-    // 用 pagehide + fetch keepalive 比 sendBeacon 更可靠（支持 POST body）
-    window.addEventListener('pagehide', () => { cleanupOwnedTasks(); });
+    // 页面刷新或关闭不再删除任务，SQLite 会保留失败任务及已完成结果。
+    // 仅在用户明确点击“新建搜索”或清理任务时删除。
   }
 
   // ============== Init ==============
@@ -868,8 +912,10 @@
     on($('#clearBtn'), 'click', clearCurrentTab);
     on($('#exportJsonBtn'), 'click', exportJson);
     on($('#newSearchBtn'), 'click', newSearch);
+    on($('#refreshHistoryBtn'), 'click', loadTaskHistory);
     on($('#loadMoreFilesBtn'), 'click', () => { state.fileRenderCount += FILE_RENDER_BATCH; renderFileList(); });
     state.fileRenderCount = FILE_RENDER_BATCH;
+    loadTaskHistory();
     // 默认使用线上后端，设置弹窗仍允许手动覆盖。
   }
 

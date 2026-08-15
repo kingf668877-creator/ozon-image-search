@@ -30,6 +30,7 @@ const CDP_PORT = Number(process.env.OZON_CDP_PORT || 9225);
 const ozonSearch = require('./src/ozonSearch');
 const ozonHttp = require('./src/ozonHttp');
 const ozonSession = require('./src/ozonSession');
+const taskStore = require('./src/taskStore');
 
 const STATE = { tasks: new Map() };
 
@@ -50,9 +51,18 @@ function createTask(taskId) {
     emitter: new EventEmitter(),
   };
 }
+function persistTask(task) {
+  try { taskStore.persistTask(task); } catch (e) { console.error('[STORE] save task failed:', e.message); }
+}
+function persistResult(task, imageIndex, image) {
+  try { taskStore.saveResult(task.taskId, imageIndex, image.name, task.results[image.name]); } catch (e) { console.error('[STORE] save result failed:', e.message); }
+}
 function getTask(taskId) {
   let t = STATE.tasks.get(taskId);
-  if (!t) { t = createTask(taskId); STATE.tasks.set(taskId, t); }
+  if (!t) {
+    t = taskStore.loadTask(taskId) || createTask(taskId);
+    STATE.tasks.set(taskId, t);
+  }
   return t;
 }
 
@@ -106,7 +116,7 @@ async function runSearch(img) {
 
 async function startSearch(taskId) {
   const task = getTask(taskId);
-  // Fail fast if CDP is down so the task doesn't pretend to run.
+  // Fail fast if CDP is down and persist the failure so it remains queryable.
   if (MODE === 'http') {
     try {
       const tabs = await ozonSearch.listTabs(CDP_PORT);
@@ -114,17 +124,20 @@ async function startSearch(taskId) {
       if (!ozonTabs.length) {
         task.status = 'failed';
         task.message = 'Chrome 已就绪但缺少 OZON 标签页，请检查浏览器窗口';
+        persistTask(task);
         return;
       }
     } catch (e) {
       task.status = 'failed';
       task.message = `Chrome 未运行或 CDP 不可达 (port ${CDP_PORT})，请启动 start-ozon-headless.ps1`;
+      persistTask(task);
       return;
     }
   }
-  task.search_started_at = Date.now();
+  task.search_started_at = task.search_started_at || Date.now();
   task.status = 'searching';
   task.message = `正在搜索 ${task.total} 张图片...`;
+  persistTask(task);
 
   const concurrency = MODE === 'attach'
     ? 1
@@ -138,6 +151,7 @@ async function startSearch(taskId) {
       nextIndex += 1;
       if (i >= task.images.length) return;
       const img = task.images[i];
+      if (!img.diskPath || img.status === 'completed' || img.status === 'no_results') continue;
       img.status = 'searching';
       task.current = Math.min(task.searched_count + 1, task.total);
       task.message = `(${task.current}/${task.total}) ${img.name}`;
@@ -160,6 +174,7 @@ async function startSearch(taskId) {
             search_attempts: r.search_attempts,
           };
           img.status = products.length ? 'completed' : 'no_results';
+          persistResult(task, i, img);
         } else {
           task.results[img.name] = {
             image_name: img.name,
@@ -170,6 +185,7 @@ async function startSearch(taskId) {
             errorCode: r.code,
           };
           img.status = 'failed';
+          persistResult(task, i, img);
         }
       } catch (e) {
         console.error('[TASK]', taskId, 'image', img.name, 'failed:', e.message);
@@ -182,9 +198,11 @@ async function startSearch(taskId) {
           errorCode: e.code,
         };
         img.status = 'failed';
+        persistResult(task, i, img);
       }
       task.searched_count += 1;
       task.current = Math.min(task.searched_count, task.total);
+      persistTask(task);
     }
   }
 
@@ -193,8 +211,10 @@ async function startSearch(taskId) {
   if (MODE === 'http' && Object.values(task.results).every((r) => r && r.errorCode === 'auth_invalid')) {
     task.message = '浏览器会话已过期，请在 Chrome 中重新登录 OZON 并重试';
   }
-  task.status = task.canceled ? 'failed' : 'completed';
-  task.message = task.canceled ? '已取消' : '完成';
+  const failedCount = task.images.filter((image) => image.status === 'failed').length;
+  task.status = task.canceled ? 'failed' : (failedCount ? 'partial' : 'completed');
+  task.message = task.canceled ? '已取消，已保留已完成结果' : (failedCount ? `部分完成，${failedCount} 张失败，已保留成功结果` : '完成');
+  persistTask(task);
 }
 
 // ============== Express ==============
@@ -229,7 +249,7 @@ function clearAllTasks() {
   STATE.tasks.clear();
 }
 
-cleanupUploads();
+// 保留 uploads 中的历史任务文件，任务数据由 SQLite 管理。
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
@@ -290,14 +310,7 @@ app.post('/api/session/refresh', async (req, res) => {
 });
 
 app.get('/api/tasks', (req, res) => {
-  res.json({
-    success: true,
-    service: 'ozon-image-search',
-    mode: MODE,
-    tasks: Array.from(STATE.tasks.values()).map((t) => ({
-      taskId: t.taskId, status: t.status, total: t.total, current: t.current,
-    })),
-  });
+  res.json({ success: true, service: 'ozon-image-search', mode: MODE, tasks: taskStore.listTasks() });
 });
 
 app.post('/api/upload/:taskId', upload.array('files', 200), (req, res) => {
@@ -312,6 +325,7 @@ app.post('/api/upload/:taskId', upload.array('files', 200), (req, res) => {
   task.images.push(...uploaded);
   task.total = task.images.length;
   task.status = 'queued';
+  persistTask(task);
   res.json({ success: true, task_id: task.taskId, uploaded_count: uploaded.length });
 });
 
@@ -330,6 +344,7 @@ app.post('/api/upload_b64', async (req, res) => {
   task.images.push({ name: safeName, originalName: fileName, diskPath, status: 'downloaded', size: buf.length });
   task.total = task.images.length;
   task.status = 'queued';
+  persistTask(task);
   res.json({ success: true, task_id: task.taskId, total_images: task.images.length });
   if (auto_search) setImmediate(() => startSearch(task.taskId));
 });
@@ -396,6 +411,7 @@ app.post('/api/upload_urls', async (req, res) => {
   task.total = task.expected_total || task.images.length;
   task.status = 'downloading';
   task.message = `正在下载图片 ${task.downloaded_count}/${task.total}`;
+  persistTask(task);
 
   // 先同步下载所有 URL 图片到本地（用于结果区展示缩略图 + 提供给 runSearch 走本地路径）
   // 限制并发数为 5，避免阻塞
@@ -423,6 +439,7 @@ app.post('/api/upload_urls', async (req, res) => {
       task.downloaded_count += 1;
       task.current = task.downloaded_count;
       task.message = `正在下载图片 ${task.downloaded_count}/${task.total}`;
+      try { taskStore.saveTask(task); taskStore.saveImage(task.taskId, img, taskIndex); } catch (e) { console.error('[STORE] save download failed:', e.message); }
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, urls.length) }, () => worker()));
@@ -452,15 +469,26 @@ app.post('/api/upload_urls', async (req, res) => {
 app.post('/api/search/:taskId', (req, res) => {
   const task = getTask(req.params.taskId);
   if (!task.images.length) return res.status(400).json({ success: false, error: 'no_images' });
-  // 对任何有 diskPath 且尚未成功搜索的图触发 startSearch
-  const pending = task.images.filter(
-    (i) => i.diskPath && i.status !== 'completed' && i.status !== 'searching'
-  );
-  if (!pending.length) {
-    return res.json({ success: true, message: 'all_ready', ready: task.images.length });
-  }
+  const pending = task.images.filter((i) => i.diskPath && !['completed', 'no_results', 'searching'].includes(i.status));
+  if (!pending.length) return res.json({ success: true, message: 'all_ready', ready: task.images.length });
+  task.canceled = false;
+  task.status = 'queued';
+  task.message = `准备继续 ${pending.length} 张图片`;
+  persistTask(task);
   setImmediate(() => startSearch(task.taskId));
-  res.json({ success: true, pending: pending.length });
+  res.json({ success: true, pending: pending.length, preserved_results: Object.keys(task.results).length });
+});
+
+app.post('/api/tasks/:taskId/retry-failed', (req, res) => {
+  const task = getTask(req.params.taskId);
+  const failed = task.images.filter((image) => image.status === 'failed' && image.diskPath);
+  failed.forEach((image) => { image.status = 'pending'; image.error = null; });
+  task.canceled = false;
+  task.status = failed.length ? 'queued' : task.status;
+  task.message = failed.length ? `准备重试 ${failed.length} 张失败图片` : '没有可重试的失败图片';
+  persistTask(task);
+  if (failed.length) setImmediate(() => startSearch(task.taskId));
+  res.json({ success: true, retried: failed.length, preserved_results: Object.keys(task.results).length });
 });
 
 app.get('/api/status/:taskId', (req, res) => {
@@ -472,7 +500,8 @@ app.get('/api/status/:taskId', (req, res) => {
     total: t.total,
     searched_count: t.searched_count,
     downloaded_count: t.downloaded_count,
-    results_count: Object.keys(t.results).length,
+    results_count: taskStore.getResultSummary(t.taskId).image_count,
+    total_products: taskStore.getResultSummary(t.taskId).product_count,
     search_started_at: t.search_started_at,
     image_statuses_total: t.images.length,
     image_statuses: t.images.slice(0, 200).map((img) => ({
@@ -491,11 +520,19 @@ app.get('/api/status/:taskId', (req, res) => {
 
 app.get('/api/results/:taskId', (req, res) => {
   const t = getTask(req.params.taskId);
+  const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  const rows = taskStore.getResultRows(t.taskId, limit, offset);
+  const results = {};
+  for (const row of rows) { try { results[row.imageName] = JSON.parse(row.payload); } catch {} }
   res.json({
+    status: t.status,
+    message: t.message,
     total_images: t.total,
-    total_products: Object.values(t.results).reduce((s, r) => s + (r.result_count || 0), 0),
+    total_results: taskStore.getResultSummary(t.taskId).image_count,
+    total_products: taskStore.getResultSummary(t.taskId).product_count,
     search_duration: (Date.now() - (t.search_started_at || t.createdAt)) / 1000,
-    results: t.results,
+    results,
   });
 });
 
@@ -510,6 +547,7 @@ app.post('/api/tasks/:taskId/cancel', (req, res) => {
 app.post('/api/cleanup', (req, res) => {
   cleanupUploads();
   clearAllTasks();
+  taskStore.clearTasks();
   res.json({ success: true });
 });
 
@@ -522,6 +560,7 @@ app.post('/api/cleanup/:taskId', (req, res) => {
     }
   } catch (e) { /* ignore */ }
   STATE.tasks.delete(taskId);
+  taskStore.deleteTask(taskId);
   res.json({ success: true });
 });
 
@@ -538,6 +577,7 @@ app.post('/api/cleanup_batch', (req, res) => {
       }
     } catch (e) { /* ignore */ }
     STATE.tasks.delete(taskId);
+    taskStore.deleteTask(taskId);
   }
   res.json({ success: true, removed });
 });
