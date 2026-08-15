@@ -97,7 +97,7 @@ function loadTask(taskId) {
   if (task.status === 'searching' || task.status === 'downloading') {
     task.status = 'failed';
     task.message = '服务曾中断，已保留已完成结果，可继续任务';
-    task.images.forEach((image) => { if (image.status === 'searching') image.status = 'pending'; });
+    task.images.forEach((image) => { if (image.status === 'searching' || image.status === 'downloading') image.status = 'pending'; });
     saveTask(task);
     task.images.forEach((image, index) => saveImage(task.taskId, image, index));
   }

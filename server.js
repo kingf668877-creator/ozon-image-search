@@ -391,7 +391,42 @@ async function downloadUrlToLocal(url, taskId, idx) {
   }
 }
 
-app.post('/api/upload_urls', async (req, res) => {
+// 后台下载：任务内批次串行、批内并发，避免请求长时间挂起触发网关超时。
+async function runDownloadEntries(task, entries) {
+  const CONCURRENCY = Number(process.env.OZON_DL_CONCURRENCY || 10);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < entries.length) {
+      const { img, idx } = entries[cursor++];
+      if (img.diskPath) continue;
+      img.status = 'downloading';
+      const r = await downloadUrlToLocal(img.url, task.taskId, idx);
+      if (r.ok) {
+        img.diskPath = r.diskPath;
+        img.name = r.name;
+        img.originalName = img.url;
+        img.status = 'downloaded';
+      } else {
+        img.error = r.error;
+        img.status = 'failed';
+      }
+      task.downloaded_count += 1;
+      task.current = task.downloaded_count;
+      task.message = `正在下载图片 ${task.downloaded_count}/${task.total}`;
+      try { taskStore.saveTask(task); taskStore.saveImage(task.taskId, img, idx); } catch (e) { console.error('[STORE] save download failed:', e.message); }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(CONCURRENCY, entries.length)) }, worker));
+}
+
+function queueDownload(task, entries, done) {
+  task.downloadChain = (task.downloadChain || Promise.resolve())
+    .then(() => runDownloadEntries(task, entries))
+    .then(() => { if (done) done(); })
+    .catch((e) => console.error('[DL] background download failed:', e.message));
+}
+
+app.post('/api/upload_urls', (req, res) => {
   const {
     urls = [],
     auto_search = true,
@@ -401,10 +436,11 @@ app.post('/api/upload_urls', async (req, res) => {
   } = req.body || {};
   const task = task_id ? getTask(task_id) : getTask(crypto.randomBytes(8).toString('hex'));
 
-  // 记录本批在任务中的真实起始位置，避免后续批次覆盖首批状态。
+  // 去重：前端重试或重复提交时，跳过任务中已有的 URL，避免重复下载。
+  const existing = new Set(task.images.map((im) => im.originalName || im.url).filter(Boolean));
+  const freshUrls = (Array.isArray(urls) ? urls : []).filter((u) => u && !existing.has(u));
   const batchStart = task.images.length;
-  const items = urls.map((u) => ({ name: u, url: u, status: 'pending' }));
-  task.images.push(...items);
+  task.images.push(...freshUrls.map((u) => ({ name: u, url: u, status: 'pending' })));
   if (typeof expected_total === 'number' && expected_total > 0) {
     task.expected_total = Math.max(task.expected_total || 0, expected_total);
   }
@@ -413,82 +449,73 @@ app.post('/api/upload_urls', async (req, res) => {
   task.message = `正在下载图片 ${task.downloaded_count}/${task.total}`;
   persistTask(task);
 
-  // 先同步下载所有 URL 图片到本地（用于结果区展示缩略图 + 提供给 runSearch 走本地路径）
-  // 限制并发数为 5，避免阻塞
-  const CONCURRENCY = 5;
-  let cursor = 0;
-  const errors = [];
-  async function worker() {
-    while (cursor < urls.length) {
-      const i = cursor++;
-      const taskIndex = batchStart + i;
-      const u = urls[i];
-      const img = task.images[taskIndex];
-      img.status = 'downloading';
-      const r = await downloadUrlToLocal(u, task.taskId, taskIndex);
-      if (r.ok) {
-        img.diskPath = r.diskPath;
-        img.name = r.name;
-        img.originalName = u;
-        img.status = 'downloaded';
-      } else {
-        img.error = r.error;
-        img.status = 'failed';
-        errors.push({ url: u, error: r.error });
-      }
-      task.downloaded_count += 1;
-      task.current = task.downloaded_count;
-      task.message = `正在下载图片 ${task.downloaded_count}/${task.total}`;
-      try { taskStore.saveTask(task); taskStore.saveImage(task.taskId, img, taskIndex); } catch (e) { console.error('[STORE] save download failed:', e.message); }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, urls.length) }, () => worker()));
-
-  // 立即返回 task_id
+  // 立即返回，下载进入后台队列；搜索在最后一批下载完成后自动开始。
   res.json({
     success: true,
     task_id: task.taskId,
-    total_uploaded: items.length,
-    batch_downloaded: urls.length - errors.length,
-    batch_failed: errors.length,
+    total_uploaded: freshUrls.length,
+    skipped_duplicates: urls.length - freshUrls.length,
   });
 
-  const expected = task.expected_total || task.total;
-  const received = task.images.length;
-  if (auto_search && (is_last_batch || received >= expected)) {
-    setImmediate(() => {
+  const entries = freshUrls.map((u, k) => ({ img: task.images[batchStart + k], idx: batchStart + k }));
+  queueDownload(task, entries, () => {
+    const expected = task.expected_total || task.total;
+    const received = task.images.length;
+    const allSettled = task.images.every((im) => im.diskPath || im.status === 'failed');
+    if (auto_search && (is_last_batch || received >= expected) && allSettled) {
       task.current = 0;
       startSearch(task.taskId);
-    });
-  } else {
-    task.status = 'queued';
-    task.message = `已下载 ${task.downloaded_count}/${expected} 张图片，等待剩余批次`;
-  }
+    } else if (task.status !== 'searching') {
+      task.status = 'queued';
+      task.message = `已下载 ${task.downloaded_count}/${expected} 张图片，等待剩余批次`;
+      persistTask(task);
+    }
+  });
 });
 
 app.post('/api/search/:taskId', (req, res) => {
   const task = getTask(req.params.taskId);
   if (!task.images.length) return res.status(400).json({ success: false, error: 'no_images' });
-  const pending = task.images.filter((i) => i.diskPath && !['completed', 'no_results', 'searching'].includes(i.status));
-  if (!pending.length) return res.json({ success: true, message: 'all_ready', ready: task.images.length });
+  // 需要补下载的图（有 URL 但还没有本地文件）+ 需要搜索的图（已有文件但未完成）
+  const needDownload = task.images
+    .map((img, idx) => ({ img, idx }))
+    .filter((e) => e.img.url && !e.img.diskPath && !['completed', 'no_results', 'searching', 'downloading'].includes(e.img.status));
+  const pendingSearch = task.images.filter((i) => i.diskPath && !['completed', 'no_results', 'searching'].includes(i.status));
+  if (!needDownload.length && !pendingSearch.length) return res.json({ success: true, message: 'all_ready', ready: task.images.length });
   task.canceled = false;
-  task.status = 'queued';
-  task.message = `准备继续 ${pending.length} 张图片`;
+  task.status = needDownload.length ? 'downloading' : 'queued';
+  task.message = needDownload.length ? `准备补下载 ${needDownload.length} 张图片` : `准备继续 ${pendingSearch.length} 张图片`;
   persistTask(task);
-  setImmediate(() => startSearch(task.taskId));
-  res.json({ success: true, pending: pending.length, preserved_results: Object.keys(task.results).length });
+  needDownload.forEach((e) => { e.img.status = 'pending'; e.img.error = null; });
+  if (needDownload.length) {
+    queueDownload(task, needDownload, () => {
+      task.current = 0;
+      startSearch(task.taskId);
+    });
+  } else {
+    setImmediate(() => startSearch(task.taskId));
+  }
+  res.json({ success: true, to_download: needDownload.length, pending: pendingSearch.length, preserved_results: Object.keys(task.results).length });
 });
 
 app.post('/api/tasks/:taskId/retry-failed', (req, res) => {
   const task = getTask(req.params.taskId);
-  const failed = task.images.filter((image) => image.status === 'failed' && image.diskPath);
-  failed.forEach((image) => { image.status = 'pending'; image.error = null; });
+  const failedEntries = task.images.map((img, idx) => ({ img, idx })).filter((e) => e.img.status === 'failed');
+  const needDownload = failedEntries.filter((e) => e.img.url && !e.img.diskPath);
+  failedEntries.forEach((e) => { e.img.status = 'pending'; e.img.error = null; });
   task.canceled = false;
-  task.status = failed.length ? 'queued' : task.status;
-  task.message = failed.length ? `准备重试 ${failed.length} 张失败图片` : '没有可重试的失败图片';
+  task.status = failedEntries.length ? 'queued' : task.status;
+  task.message = failedEntries.length ? `准备重试 ${failedEntries.length} 张图片` : '没有可重试的失败图片';
   persistTask(task);
-  if (failed.length) setImmediate(() => startSearch(task.taskId));
-  res.json({ success: true, retried: failed.length, preserved_results: Object.keys(task.results).length });
+  if (needDownload.length) {
+    queueDownload(task, needDownload, () => {
+      task.current = 0;
+      startSearch(task.taskId);
+    });
+  } else if (failedEntries.length) {
+    setImmediate(() => startSearch(task.taskId));
+  }
+  res.json({ success: true, retried: failedEntries.length, preserved_results: Object.keys(task.results).length });
 });
 
 app.get('/api/status/:taskId', (req, res) => {

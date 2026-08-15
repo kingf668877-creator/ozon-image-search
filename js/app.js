@@ -366,6 +366,45 @@
   }
 
   // ============== Search Flow ==============
+  // 逐批提交 URL：后端立即接收并后台下载。单批失败不中断，最后统一重试一轮。
+  async function submitUrlBatches(endpoint, allUrls) {
+    const failedBatches = [];
+    for (let i = 0; i < allUrls.length; i += CHUNK_SIZE) {
+      const batch = allUrls.slice(i, i + CHUNK_SIZE);
+      const isLast = i + batch.length >= allUrls.length;
+      try {
+        await fetchWithRetry(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: batch, auto_search: isLast, task_id: state.taskId, is_last_batch: isLast, expected_total: allUrls.length }),
+        }, 2);
+      } catch (e) {
+        console.warn('batch submit failed, will retry later:', e.message);
+        failedBatches.push({ batch, isLast });
+      }
+      const submitted = Math.min(i + batch.length, allUrls.length);
+      $('#progressStatus').textContent = `已提交 ${submitted}/${allUrls.length}，后台下载中`;
+      $('#progressTotal').textContent = allUrls.length;
+      $('#progressCurrent').textContent = submitted;
+    }
+    // 收尾重试一轮失败的批次；若仍失败则抛出让用户知道有图片未提交。
+    const stillFailed = [];
+    for (const { batch, isLast } of failedBatches) {
+      try {
+        await fetchWithRetry(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: batch, auto_search: isLast, task_id: state.taskId, is_last_batch: isLast, expected_total: allUrls.length }),
+        }, 2);
+      } catch (e) { stillFailed.push({ batch, isLast }); }
+    }
+    state.submittedOk = allUrls.length - stillFailed.reduce((s, b) => s + b.batch.length, 0);
+    if (stillFailed.length) {
+      throw new Error(`${stillFailed.length} 个批次提交失败（约 ${stillFailed.reduce((s, b) => s + b.batch.length, 0)} 张图片），已提交部分会在后台继续，也可稍后在任务记录中点“继续任务”补传`);
+    }
+    state.submittedOk = allUrls.length;
+  }
+
   async function startSearch() {
     if (state.isSearching) return;
     state.isSearching = true;
@@ -374,6 +413,7 @@
       : Math.random().toString(36).slice(2, 18);
     registerOwnedTask(state.taskId);
     state.results = {};
+    state.submittedOk = 0;
     state.pollStartedAt = Date.now();
     state.cancelRequested = false;
     updateSearchBtn();
@@ -411,46 +451,29 @@
         // 立刻触发搜索
         await fetchWithRetry(`${state.apiBase}/api/search/${state.taskId}`, { method: 'POST' });
       } else if (state.activeTab === 'link') {
-        // 分批串行下载，避免多个批次同时下载导致任务队列拥塞。
+        // 后端立即接收批次并后台下载；这里逐批提交，单批失败收集后重试，不中断整个上传。
         endpoint = `${state.apiBase}/api/upload_urls`;
         const allUrls = state.urls.map((u) => u.url);
-        for (let i = 0; i < allUrls.length; i += CHUNK_SIZE) {
-          const batch = allUrls.slice(i, i + CHUNK_SIZE);
-          const isLast = i + batch.length >= allUrls.length;
-          await fetchWithRetry(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ urls: batch, auto_search: isLast, task_id: state.taskId, is_last_batch: isLast, expected_total: allUrls.length }),
-          });
-          $('#progressStatus').textContent = `正在下载图片 ${Math.min(i + batch.length, allUrls.length)}/${allUrls.length}`;
-          $('#progressTotal').textContent = allUrls.length;
-          $('#progressCurrent').textContent = Math.min(i + batch.length, allUrls.length);
-        }
+        await submitUrlBatches(endpoint, allUrls);
       } else {
-        // table: 从 Excel/CSV 识别的 URL，按批次串行下载。
+        // table: 从 Excel/CSV 识别的 URL，同样按批次提交并后台下载。
         endpoint = `${state.apiBase}/api/upload_urls`;
         const allUrls = (state.tableUrls || []).map((u) => u.url);
-        for (let i = 0; i < allUrls.length; i += CHUNK_SIZE) {
-          const batch = allUrls.slice(i, i + CHUNK_SIZE);
-          const isLast = i + batch.length >= allUrls.length;
-          await fetchWithRetry(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ urls: batch, auto_search: isLast, task_id: state.taskId, is_last_batch: isLast, expected_total: allUrls.length }),
-          });
-          $('#progressStatus').textContent = `正在下载图片 ${Math.min(i + batch.length, allUrls.length)}/${allUrls.length}`;
-          $('#progressTotal').textContent = allUrls.length;
-          $('#progressCurrent').textContent = Math.min(i + batch.length, allUrls.length);
-        }
+        await submitUrlBatches(endpoint, allUrls);
       }
       const seconds = ((Date.now() - t0) / 1000).toFixed(1);
       $('#uploadTiming').hidden = false;
       $('#timingVal').textContent = seconds;
     } catch (e) {
-      stopPolling();
-      alert('上传失败：' + e.message);
-      state.isSearching = false;
-      updateSearchBtn();
+      if (state.submittedOk > 0) {
+        // 已有批次提交成功，任务在后台继续，保持进度轮询。
+        alert('提示：' + e.message);
+      } else {
+        stopPolling();
+        alert('上传失败：' + e.message);
+        state.isSearching = false;
+        updateSearchBtn();
+      }
     }
   }
 
