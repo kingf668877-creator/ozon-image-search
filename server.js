@@ -175,7 +175,7 @@ async function startSearch(taskId) {
 
   const concurrency = MODE === 'attach'
     ? 1
-    : Number(process.env.OZON_HTTP_CONCURRENCY || 5);
+    : Number(process.env.OZON_HTTP_CONCURRENCY || 10);
 
   // 拉取式认领：扫描已下载且未搜索的图片并原子标记 searching，下载与搜索即可并行。
   function claimNext() {
@@ -334,7 +334,7 @@ app.get('/api/health', (req, res) => {
     cdpPort: CDP_PORT,
     startedAt: new Date().toISOString(),
     session: ozonSession.status(),
-    concurrency: MODE === 'attach' ? 1 : Number(process.env.OZON_HTTP_CONCURRENCY || 5),
+    concurrency: MODE === 'attach' ? 1 : Number(process.env.OZON_HTTP_CONCURRENCY || 10),
     search_pool: MODE === 'http' ? ozonHttp.getPoolStats() : null,
   });
 });
