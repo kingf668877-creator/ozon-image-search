@@ -48,8 +48,29 @@ function createTask(taskId) {
     downloaded_count: 0,
     search_started_at: null,
     canceled: false,
+    // 流水线状态：submitDone=URL 批次已全部提交；dlQueued=后台待下载数；pipelineActive=搜索管线运行中
+    submitDone: true,
+    dlQueued: 0,
+    pipelineActive: false,
     emitter: new EventEmitter(),
   };
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// 只落盘任务元数据（不重写全部图片行），供高频更新点使用。
+function persistTaskMeta(task) {
+  if (task.deleted) return;
+  try { taskStore.saveTask(task); } catch (e) { console.error('[STORE] save task meta failed:', e.message); }
+}
+function saveImagesRange(task, from, to) {
+  for (let i = from; i < to && i < task.images.length; i++) {
+    try { taskStore.saveImage(task.taskId, task.images[i], i); } catch (e) { console.error('[STORE] save image failed:', e.message); }
+  }
+}
+// 下载量达到阈值即提前启动搜索（边下边搜），默认 20 张。
+const EARLY_SEARCH_THRESHOLD = Number(process.env.OZON_EARLY_SEARCH_THRESHOLD || 20);
+function maybeStartEarly(task) {
+  if (task.canceled || task.deleted || task.pipelineActive) return;
+  if (task.downloaded_count >= EARLY_SEARCH_THRESHOLD) startSearch(task.taskId);
 }
 function persistTask(task) {
   if (task.deleted) return;
@@ -145,25 +166,47 @@ async function startSearch(taskId) {
       return;
     }
   }
+  if (task.pipelineActive) return; // 管线已在运行（边下边搜模式），无需重复启动
+  task.pipelineActive = true;
   task.search_started_at = task.search_started_at || Date.now();
   task.status = 'searching';
   task.message = `正在搜索 ${task.total} 张图片...`;
-  persistTask(task);
+  persistTaskMeta(task);
 
   const concurrency = MODE === 'attach'
     ? 1
     : Number(process.env.OZON_HTTP_CONCURRENCY || 5);
 
-  let nextIndex = 0;
+  // 拉取式认领：扫描已下载且未搜索的图片并原子标记 searching，下载与搜索即可并行。
+  function claimNext() {
+    for (let i = 0; i < task.images.length; i++) {
+      const im = task.images[i];
+      if (im.diskPath && (im.status === 'pending' || im.status === 'downloaded')) {
+        im.status = 'searching';
+        return { img: im, i };
+      }
+    }
+    return null;
+  }
+  // 输入是否结束：URL 批次全部提交完成且后台下载队列已清空。
+  function inputDone() {
+    return task.submitDone && task.dlQueued === 0;
+  }
   async function worker() {
+    let idleMs = 0;
     while (true) {
-      if (task.canceled) return;
-      const i = nextIndex;
-      nextIndex += 1;
-      if (i >= task.images.length) return;
-      const img = task.images[i];
-      if (!img.diskPath || img.status === 'completed' || img.status === 'no_results') continue;
-      img.status = 'searching';
+      if (task.canceled || task.deleted) return;
+      const claimed = claimNext();
+      if (!claimed) {
+        if (inputDone()) return;
+        // 提交中断且长时间无新图片时退出，避免任务永久停留在 searching。
+        idleMs += 500;
+        if (idleMs >= 10 * 60 * 1000) return;
+        await sleep(500);
+        continue;
+      }
+      idleMs = 0;
+      const { img, i } = claimed;
       task.current = Math.min(task.searched_count + 1, task.total);
       task.message = `(${task.current}/${task.total}) ${img.name}`;
       const t0 = Date.now();
@@ -213,11 +256,14 @@ async function startSearch(taskId) {
       }
       task.searched_count += 1;
       task.current = Math.min(task.searched_count, task.total);
-      persistTask(task);
+      persistTaskMeta(task);
+      try { taskStore.saveImage(task.taskId, img, i); } catch (e) { /* 状态行写入失败不影响结果 */ }
     }
   }
 
-  await Promise.all(Array.from({ length: Math.min(concurrency, task.images.length) }, worker));
+  await Promise.all(Array.from({ length: Math.max(1, concurrency) }, worker));
+  task.pipelineActive = false;
+  if (task.deleted) return;
 
   if (MODE === 'http' && Object.values(task.results).every((r) => r && r.errorCode === 'auth_invalid')) {
     task.message = '浏览器会话已过期，请在 Chrome 中重新登录 OZON 并重试';
@@ -428,16 +474,20 @@ async function runDownloadEntries(task, entries) {
       task.current = task.downloaded_count;
       task.message = `正在下载图片 ${task.downloaded_count}/${task.total}`;
       try { taskStore.saveTask(task); taskStore.saveImage(task.taskId, img, idx); } catch (e) { console.error('[STORE] save download failed:', e.message); }
+      // 边下边搜：下载量达到阈值即触发搜索管线（若尚未启动）。
+      maybeStartEarly(task);
     }
   }
   await Promise.all(Array.from({ length: Math.max(1, Math.min(CONCURRENCY, entries.length)) }, worker));
 }
 
 function queueDownload(task, entries, done) {
+  if (!entries.length) { if (done) done(); return; }
+  task.dlQueued += entries.length;
   task.downloadChain = (task.downloadChain || Promise.resolve())
     .then(() => runDownloadEntries(task, entries))
-    .then(() => { if (done) done(); })
-    .catch((e) => console.error('[DL] background download failed:', e.message));
+    .then(() => { task.dlQueued -= entries.length; if (done) done(); })
+    .catch((e) => { task.dlQueued -= entries.length; console.error('[DL] background download failed:', e.message); if (done) done(); });
 }
 
 app.post('/api/upload_urls', (req, res) => {
@@ -458,12 +508,16 @@ app.post('/api/upload_urls', (req, res) => {
   if (typeof expected_total === 'number' && expected_total > 0) {
     task.expected_total = Math.max(task.expected_total || 0, expected_total);
   }
+  const received = task.images.length;
   task.total = task.expected_total || task.images.length;
   task.status = 'downloading';
   task.message = `正在下载图片 ${task.downloaded_count}/${task.total}`;
-  persistTask(task);
+  // 是否还有后续批次：搜索管线据此判断何时可以收尾。
+  task.submitDone = Boolean(is_last_batch) || (typeof expected_total === 'number' && received >= expected_total);
+  persistTaskMeta(task);
+  saveImagesRange(task, batchStart, task.images.length);
 
-  // 立即返回，下载进入后台队列；搜索在最后一批下载完成后自动开始。
+  // 立即返回，下载进入后台队列；下载达到阈值即边下边搜，全部批次结束后自动收尾。
   res.json({
     success: true,
     task_id: task.taskId,
@@ -475,17 +529,17 @@ app.post('/api/upload_urls', (req, res) => {
   queueDownload(task, entries, () => {
     if (task.canceled || task.deleted) return;
     const expected = task.expected_total || task.total;
-    const received = task.images.length;
-    const allSettled = task.images.every((im) => im.diskPath || im.status === 'failed');
-    if (auto_search && (is_last_batch || received >= expected) && allSettled) {
-      task.current = 0;
-      startSearch(task.taskId);
-    } else if (task.status !== 'searching') {
+    // 所有批次已提交且后台下载队列已清空：确保搜索管线启动（小任务未达阈值也能触发）。
+    if (auto_search && task.submitDone && task.dlQueued === 0) {
+      startSearch(task.taskId); // 管线已在运行时此调用为空操作
+    } else if (!['searching', 'partial', 'completed'].includes(task.status)) {
       task.status = 'queued';
       task.message = `已下载 ${task.downloaded_count}/${expected} 张图片，等待剩余批次`;
-      persistTask(task);
+      persistTaskMeta(task);
     }
   });
+  // 本批提交后立即检查一次阈值，覆盖下载回调之外的触发时序。
+  maybeStartEarly(task);
 });
 
 app.post('/api/search/:taskId', (req, res) => {

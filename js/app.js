@@ -383,7 +383,7 @@
         failedBatches.push({ batch, isLast });
       }
       const submitted = Math.min(i + batch.length, allUrls.length);
-      $('#progressStatus').textContent = `已提交 ${submitted}/${allUrls.length}，后台下载中`;
+      $('#progressStatus').textContent = `已提交 ${submitted}/${allUrls.length}，边下载边搜索`;
       $('#progressTotal').textContent = allUrls.length;
       $('#progressCurrent').textContent = submitted;
     }
@@ -524,7 +524,9 @@
     const pct = total ? Math.round((cur / total) * 100) : 0;
     $('#progressPercent').textContent = pct + '%';
     $('#progressFill').style.width = pct + '%';
-    $('#progressStatus').textContent = (isSearchPhase && j.status === 'searching') ? `搜索中 ${cur}/${total}` : (j.message || j.status || '准备中');
+    // 边下边搜：搜索进行中同时显示下载进度。
+    const dlNote = downloaded < total ? ` · 下载中 ${downloaded}/${total}` : '';
+    $('#progressStatus').textContent = (isSearchPhase && j.status === 'searching') ? `搜索中 ${cur}/${total}${dlNote}` : (j.message || j.status || '准备中');
     // 商品总数由服务端从 SQLite 汇总返回，避免用图片数冒充商品数。
     const products = Number.isFinite(Number(j.total_products)) ? Number(j.total_products) : 0;
     $('#foundProducts').textContent = products;
