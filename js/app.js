@@ -524,9 +524,11 @@
     const pct = total ? Math.round((cur / total) * 100) : 0;
     $('#progressPercent').textContent = pct + '%';
     $('#progressFill').style.width = pct + '%';
-    // 边下边搜：搜索进行中同时显示下载进度。
+    // 边下边搜：搜索进行中同时显示下载进度和真实活跃并发。
     const dlNote = downloaded < total ? ` · 下载中 ${downloaded}/${total}` : '';
-    $('#progressStatus').textContent = (isSearchPhase && j.status === 'searching') ? `搜索中 ${cur}/${total}${dlNote}` : (j.message || j.status || '准备中');
+    const pool = j.search_pool || {};
+    const concurrencyNote = isSearchPhase ? ` · 并发 ${Number(pool.active) || 0}/${Number(pool.configured) || 5}` : '';
+    $('#progressStatus').textContent = (isSearchPhase && j.status === 'searching') ? `搜索中 ${cur}/${total}${dlNote}${concurrencyNote}` : (j.message || j.status || '准备中');
     // 商品总数由服务端从 SQLite 汇总返回，避免用图片数冒充商品数。
     const products = Number.isFinite(Number(j.total_products)) ? Number(j.total_products) : 0;
     $('#foundProducts').textContent = products;

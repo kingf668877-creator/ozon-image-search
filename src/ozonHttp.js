@@ -13,12 +13,13 @@ const http = require('http');
 const { findOzonTab } = require('./ozonSession');
 const { parseProductsFromTileGrid } = require('./ozonParse');
 
-const DEFAULT_CONCURRENCY = Number(process.env.OZON_HTTP_CONCURRENCY || 4);
+const DEFAULT_CONCURRENCY = Number(process.env.OZON_HTTP_CONCURRENCY || 5);
 const MIN_INTERVAL_MS = Number(process.env.OZON_HTTP_MIN_INTERVAL_MS || 0);
 
 const handlePool = [];
 let poolInitPromise = null;
 let lastRequestAt = 0;
+let waitingCount = 0;
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -100,14 +101,19 @@ async function acquireHandle() {
     err.code = 'no_handle';
     throw err;
   }
-  while (true) {
-    const idle = handlePool.find((h) => !h.busy);
-    if (idle) {
-      idle.busy = true;
-      idle.lastUsedAt = Date.now();
-      return idle;
+  waitingCount += 1;
+  try {
+    while (true) {
+      const idle = handlePool.find((h) => !h.busy);
+      if (idle) {
+        idle.busy = true;
+        idle.lastUsedAt = Date.now();
+        return idle;
+      }
+      await sleep(50);
     }
-    await sleep(50);
+  } finally {
+    waitingCount = Math.max(0, waitingCount - 1);
   }
 }
 
@@ -276,10 +282,21 @@ async function uploadImage(fileBuffer, fileName) {
   finally { releaseHandle(handle); }
 }
 
+function getPoolStats() {
+  return {
+    configured: DEFAULT_CONCURRENCY,
+    pool_size: handlePool.length,
+    active: handlePool.filter((h) => h.busy).length,
+    idle: handlePool.filter((h) => !h.busy).length,
+    waiting: waitingCount,
+  };
+}
+
 module.exports = {
   searchByFile,
   searchByImageId,
   uploadImage,
   DEFAULT_CONCURRENCY,
   ensurePool,
+  getPoolStats,
 };

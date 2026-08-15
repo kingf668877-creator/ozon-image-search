@@ -335,6 +335,7 @@ app.get('/api/health', (req, res) => {
     startedAt: new Date().toISOString(),
     session: ozonSession.status(),
     concurrency: MODE === 'attach' ? 1 : Number(process.env.OZON_HTTP_CONCURRENCY || 5),
+    search_pool: MODE === 'http' ? ozonHttp.getPoolStats() : null,
   });
 });
 
@@ -599,6 +600,7 @@ app.get('/api/status/:taskId', (req, res) => {
     results_count: taskStore.getResultSummary(t.taskId).image_count,
     total_products: taskStore.getResultSummary(t.taskId).product_count,
     search_started_at: t.search_started_at,
+    search_pool: MODE === 'http' ? ozonHttp.getPoolStats() : null,
     image_statuses_total: t.images.length,
     // 大任务只返回最新 200 条明细，让状态列表始终反映当前正在处理的图片。
     image_statuses: t.images.slice(-200).map((img) => ({
