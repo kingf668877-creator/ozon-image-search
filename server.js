@@ -531,7 +531,8 @@ app.get('/api/status/:taskId', (req, res) => {
     total_products: taskStore.getResultSummary(t.taskId).product_count,
     search_started_at: t.search_started_at,
     image_statuses_total: t.images.length,
-    image_statuses: t.images.slice(0, 200).map((img) => ({
+    // 大任务只返回最新 200 条明细，让状态列表始终反映当前正在处理的图片。
+    image_statuses: t.images.slice(-200).map((img) => ({
       name: img.name,
       status: img.status,
       result_count: (t.results[img.name] || {}).result_count || 0,

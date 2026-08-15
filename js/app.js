@@ -514,31 +514,33 @@
   function applyProgress(j) {
     state.lastProgress = j;
     const total = Number.isFinite(Number(j.total)) ? Number(j.total) : 0;
-    const cur = Number.isFinite(Number(j.current)) ? Number(j.current) : 0;
+    const searched = Number.isFinite(Number(j.searched_count)) ? Number(j.searched_count) : 0;
+    const downloaded = Number.isFinite(Number(j.downloaded_count)) ? Number(j.downloaded_count) : 0;
+    // 进度条分阶段：下载阶段按已下载数，搜索阶段按已搜索数，分子随真实进度推进。
+    const isSearchPhase = ['searching', 'completed', 'partial'].includes(j.status) || searched > 0;
+    const cur = isSearchPhase ? searched : downloaded;
     $('#progressTotal').textContent = total;
     $('#progressCurrent').textContent = cur;
     const pct = total ? Math.round((cur / total) * 100) : 0;
     $('#progressPercent').textContent = pct + '%';
     $('#progressFill').style.width = pct + '%';
-    $('#progressStatus').textContent = j.message || j.status || '准备中';
-    // 状态接口只提供“已返回结果的图片数”，商品总数在结果接口中统一计算。
-    const completedImages = Number.isFinite(Number(j.results_count)) ? Number(j.results_count) : 0;
-    $('#foundProducts').textContent = completedImages;
+    $('#progressStatus').textContent = (isSearchPhase && j.status === 'searching') ? `搜索中 ${cur}/${total}` : (j.message || j.status || '准备中');
+    // 商品总数由服务端从 SQLite 汇总返回，避免用图片数冒充商品数。
+    const products = Number.isFinite(Number(j.total_products)) ? Number(j.total_products) : 0;
+    $('#foundProducts').textContent = products;
     if (total > 0 && cur > 0) {
-      const elapsed = (Date.now() - state.pollStartedAt) / 1000;
+      // 搜索阶段用服务端记录的搜索开始时间，避免把下载耗时算进剩余预估。
+      const phaseStart = (isSearchPhase && Number(j.search_started_at)) ? Number(j.search_started_at) : state.pollStartedAt;
+      const elapsed = Math.max(1, (Date.now() - phaseStart) / 1000);
       const avg = elapsed / cur;
       const remain = avg * (total - cur);
       $('#estimatedTime').textContent = fmtTime(remain);
     }
-    // 显示「搜索中：N/M 张」的进度式描述（分子=已完成数，随搜索推进 0→总数）
+    // 阶段化描述：直接用服务端真实计数，不依赖只返回前 200 条的状态明细。
     const imgStatuses = j.image_statuses || [];
     const imgTotal = Number(j.image_statuses_total) || Number(j.total) || imgStatuses.length || 0;
-    let doneCount = 0;
-    imgStatuses.forEach((s) => {
-      if (s.status === 'completed' || s.status === 'no_results' || s.status === 'failed') doneCount++;
-    });
-    const statusLabel = j.status === 'completed' ? '已完成' : (j.status === 'partial' ? '部分完成' : '搜索中');
-    $('#currentImage').textContent = `${statusLabel}：${doneCount}/${imgTotal} 张`;
+    const statusLabel = j.status === 'completed' ? '已完成' : (j.status === 'partial' ? '部分完成' : (isSearchPhase ? '搜索中' : '下载中'));
+    $('#currentImage').textContent = `${statusLabel}：${isSearchPhase ? searched : downloaded}/${imgTotal} 张`;
     // 渲染状态列表
     const list = $('#imageStatusList');
     list.innerHTML = '';
@@ -553,7 +555,7 @@
       );
       list.appendChild(row);
     });
-    const visibleNote = imgStatuses.length < imgTotal ? `（显示前 ${imgStatuses.length} 条）` : '';
+    const visibleNote = imgStatuses.length < imgTotal ? `（显示最新 ${imgStatuses.length} 条）` : '';
     $('#imageStatusSummary').textContent = `${Number(j.searched_count) || done}/${imgTotal} 已完成 ${visibleNote}`;
   }
 
