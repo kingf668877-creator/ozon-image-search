@@ -152,7 +152,7 @@ async function startSearch(taskId) {
 
   const concurrency = MODE === 'attach'
     ? 1
-    : Number(process.env.OZON_HTTP_CONCURRENCY || 3);
+    : Number(process.env.OZON_HTTP_CONCURRENCY || 5);
 
   let nextIndex = 0;
   async function worker() {
@@ -288,7 +288,7 @@ app.get('/api/health', (req, res) => {
     cdpPort: CDP_PORT,
     startedAt: new Date().toISOString(),
     session: ozonSession.status(),
-    concurrency: MODE === 'attach' ? 1 : Number(process.env.OZON_HTTP_CONCURRENCY || 3),
+    concurrency: MODE === 'attach' ? 1 : Number(process.env.OZON_HTTP_CONCURRENCY || 5),
   });
 });
 
