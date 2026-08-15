@@ -868,6 +868,7 @@
             h('button', { className: 'btn btn-ghost btn-sm', onclick: () => openHistoryTask(task.taskId) }, '查看结果'),
             h('button', { className: 'btn btn-outline btn-sm', onclick: () => resumeHistoryTask(task.taskId, false) }, '继续任务'),
             h('button', { className: 'btn btn-outline btn-sm', onclick: () => resumeHistoryTask(task.taskId, true) }, '重试失败'),
+            h('button', { className: 'btn btn-ghost btn-sm', onclick: () => deleteHistoryTask(task.taskId) }, '删除'),
           ]),
         ]);
         list.appendChild(row);
@@ -886,9 +887,20 @@
     const res = await fetch(`${state.apiBase}${endpoint}`, { method: 'POST' });
     const json = await res.json();
     if (!res.ok) { alert(json.error || '任务启动失败'); return; }
+    registerOwnedTask(taskId);
     state.isSearching = true;
     $('#progress-section').hidden = false;
     startPolling();
+  }
+
+  async function deleteHistoryTask(taskId) {
+    if (!confirm('删除该任务？图片和搜索结果会从磁盘清除，不可恢复。')) return;
+    try {
+      await fetch(`${state.apiBase}/api/cleanup/${taskId}`, { method: 'POST' });
+      state.ownedTaskIds.delete(taskId);
+      sessionStorage.setItem('ownedTaskIds', JSON.stringify(Array.from(state.ownedTaskIds)));
+      loadTaskHistory();
+    } catch (e) { alert('删除失败：' + e.message); }
   }
 
   // ============== Lifecycle ==============
@@ -915,8 +927,8 @@
     sessionStorage.removeItem('ownedTaskIds');
   }
   function setupLifecycle() {
-    // 页面刷新或关闭不再删除任务，SQLite 会保留失败任务及已完成结果。
-    // 仅在用户明确点击“新建搜索”或清理任务时删除。
+    // 任务生命周期跟随页面：刷新/关闭页面/关闭浏览器时，自动取消任务并删除图片与结果，不占用磁盘。
+    window.addEventListener('pagehide', () => { cleanupOwnedTasks(); });
   }
 
   // ============== Init ==============

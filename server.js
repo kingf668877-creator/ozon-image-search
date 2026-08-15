@@ -52,10 +52,21 @@ function createTask(taskId) {
   };
 }
 function persistTask(task) {
+  if (task.deleted) return;
   try { taskStore.persistTask(task); } catch (e) { console.error('[STORE] save task failed:', e.message); }
 }
 function persistResult(task, imageIndex, image) {
+  if (task.deleted) return;
   try { taskStore.saveResult(task.taskId, imageIndex, image.name, task.results[image.name]); } catch (e) { console.error('[STORE] save result failed:', e.message); }
+}
+// 页面离开时销毁任务：停止后台协程、删除磁盘文件和 SQLite 记录，不占用存储。
+function destroyTask(taskId) {
+  const t = STATE.tasks.get(taskId);
+  if (t) { t.canceled = true; t.deleted = true; }
+  const taskDir = path.join(UPLOAD_DIR, taskId);
+  try { if (fs.existsSync(taskDir)) fs.rmSync(taskDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
+  STATE.tasks.delete(taskId);
+  try { taskStore.deleteTask(taskId); } catch (e) { console.error('[STORE] delete task failed:', e.message); }
 }
 function getTask(taskId) {
   let t = STATE.tasks.get(taskId);
@@ -397,10 +408,13 @@ async function runDownloadEntries(task, entries) {
   let cursor = 0;
   async function worker() {
     while (cursor < entries.length) {
+      // 任务被取消或销毁（页面关闭）时立即停止，不再下载、不写库。
+      if (task.canceled || task.deleted) return;
       const { img, idx } = entries[cursor++];
       if (img.diskPath) continue;
       img.status = 'downloading';
       const r = await downloadUrlToLocal(img.url, task.taskId, idx);
+      if (task.deleted) return;
       if (r.ok) {
         img.diskPath = r.diskPath;
         img.name = r.name;
@@ -459,6 +473,7 @@ app.post('/api/upload_urls', (req, res) => {
 
   const entries = freshUrls.map((u, k) => ({ img: task.images[batchStart + k], idx: batchStart + k }));
   queueDownload(task, entries, () => {
+    if (task.canceled || task.deleted) return;
     const expected = task.expected_total || task.total;
     const received = task.images.length;
     const allSettled = task.images.every((im) => im.diskPath || im.status === 'failed');
@@ -573,6 +588,7 @@ app.post('/api/tasks/:taskId/cancel', (req, res) => {
 
 // 清理所有上传文件和内存任务（页面关闭/刷新时调用）
 app.post('/api/cleanup', (req, res) => {
+  for (const t of STATE.tasks.values()) { t.canceled = true; t.deleted = true; }
   cleanupUploads();
   clearAllTasks();
   taskStore.clearTasks();
@@ -580,15 +596,7 @@ app.post('/api/cleanup', (req, res) => {
 });
 
 app.post('/api/cleanup/:taskId', (req, res) => {
-  const taskId = req.params.taskId;
-  const taskDir = path.join(UPLOAD_DIR, taskId);
-  try {
-    if (fs.existsSync(taskDir)) {
-      fs.rmSync(taskDir, { recursive: true, force: true });
-    }
-  } catch (e) { /* ignore */ }
-  STATE.tasks.delete(taskId);
-  taskStore.deleteTask(taskId);
+  destroyTask(req.params.taskId);
   res.json({ success: true });
 });
 
@@ -597,15 +605,8 @@ app.post('/api/cleanup_batch', (req, res) => {
   let removed = 0;
   for (const taskId of taskIds) {
     if (!taskId || typeof taskId !== 'string') continue;
-    const taskDir = path.join(UPLOAD_DIR, taskId);
-    try {
-      if (fs.existsSync(taskDir)) {
-        fs.rmSync(taskDir, { recursive: true, force: true });
-        removed++;
-      }
-    } catch (e) { /* ignore */ }
-    STATE.tasks.delete(taskId);
-    taskStore.deleteTask(taskId);
+    destroyTask(taskId);
+    removed++;
   }
   res.json({ success: true, removed });
 });
