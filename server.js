@@ -407,8 +407,11 @@ app.post('/api/upload_b64', async (req, res) => {
   if (auto_search) setImmediate(() => startSearch(task.taskId));
 });
 
-// 下载 URL 图片到本地，返回 diskPath；失败返回 null
+// 下载 URL 图片到本地；超时覆盖响应头和正文读取，避免慢链接永久占住全部下载槽位。
 async function downloadUrlToLocal(url, taskId, idx) {
+  const ctrl = new AbortController();
+  const timeoutMs = Number(process.env.OZON_DL_TIMEOUT_MS || 12000);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const dir = path.join(UPLOAD_DIR, taskId);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -425,10 +428,7 @@ async function downloadUrlToLocal(url, taskId, idx) {
     } catch {}
     const safeName = `${Date.now()}_${idx}${ext}`;
     const filePath = path.join(dir, safeName);
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 30000);
     const resp = await fetch(url, { signal: ctrl.signal, redirect: 'follow' });
-    clearTimeout(t);
     if (!resp.ok) return { ok: false, error: `HTTP ${resp.status}` };
     const ct = resp.headers.get('content-type') || '';
     if (ct.includes('png') && ext === '.jpg') ext = '.png';
@@ -445,7 +445,9 @@ async function downloadUrlToLocal(url, taskId, idx) {
     fs.writeFileSync(filePath, Buffer.from(ab));
     return { ok: true, diskPath: filePath, name: safeName };
   } catch (e) {
-    return { ok: false, error: e.message };
+    return { ok: false, error: e.name === 'AbortError' ? `下载超时 ${timeoutMs}ms` : e.message };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -549,7 +551,7 @@ app.post('/api/search/:taskId', (req, res) => {
   // 需要补下载的图（有 URL 但还没有本地文件）+ 需要搜索的图（已有文件但未完成）
   const needDownload = task.images
     .map((img, idx) => ({ img, idx }))
-    .filter((e) => e.img.url && !e.img.diskPath && !['completed', 'no_results', 'searching', 'downloading'].includes(e.img.status));
+    .filter((e) => e.img.url && !e.img.diskPath && !['completed', 'no_results', 'searching'].includes(e.img.status));
   const pendingSearch = task.images.filter((i) => i.diskPath && !['completed', 'no_results', 'searching'].includes(i.status));
   if (!needDownload.length && !pendingSearch.length) return res.json({ success: true, message: 'all_ready', ready: task.images.length });
   task.canceled = false;
