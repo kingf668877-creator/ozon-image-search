@@ -408,10 +408,10 @@ app.post('/api/upload_b64', async (req, res) => {
 });
 
 // 下载 URL 图片到本地；超时覆盖响应头和正文读取，避免慢链接永久占住全部下载槽位。
-async function downloadUrlToLocal(url, taskId, idx) {
+async function downloadUrlToLocal(url, taskId, idx, timeoutMs = null) {
   const ctrl = new AbortController();
-  const timeoutMs = Number(process.env.OZON_DL_TIMEOUT_MS || 12000);
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const effectiveTimeout = Number(timeoutMs || process.env.OZON_DL_TIMEOUT_MS || 12000);
+  const timer = setTimeout(() => ctrl.abort(), effectiveTimeout);
   try {
     const dir = path.join(UPLOAD_DIR, taskId);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -445,7 +445,7 @@ async function downloadUrlToLocal(url, taskId, idx) {
     fs.writeFileSync(filePath, Buffer.from(ab));
     return { ok: true, diskPath: filePath, name: safeName };
   } catch (e) {
-    return { ok: false, error: e.name === 'AbortError' ? `下载超时 ${timeoutMs}ms` : e.message };
+    return { ok: false, error: e.name === 'AbortError' ? `下载超时 ${effectiveTimeout}ms` : e.message };
   } finally {
     clearTimeout(timer);
   }
@@ -459,10 +459,21 @@ async function runDownloadEntries(task, entries) {
     while (cursor < entries.length) {
       // 任务被取消或销毁（页面关闭）时立即停止，不再下载、不写库。
       if (task.canceled || task.deleted) return;
-      const { img, idx } = entries[cursor++];
+      const { img, idx, countDownload = true } = entries[cursor++];
       if (img.diskPath) continue;
       img.status = 'downloading';
-      const r = await downloadUrlToLocal(img.url, task.taskId, idx);
+      let r = null;
+      let lastError = '';
+      const retryTimeouts = [12000, 12000, 25000];
+      const retryDelays = [0, 2000, 5000];
+      for (let attempt = 0; attempt < retryTimeouts.length; attempt++) {
+        if (task.canceled || task.deleted) return;
+        if (retryDelays[attempt]) await sleep(retryDelays[attempt]);
+        r = await downloadUrlToLocal(img.url, task.taskId, idx, retryTimeouts[attempt]);
+        if (r.ok) break;
+        lastError = r.error || '下载失败';
+      }
+      if (!r || !r.ok) r = { ok: false, error: lastError };
       if (task.deleted) return;
       if (r.ok) {
         img.diskPath = r.diskPath;
@@ -473,7 +484,8 @@ async function runDownloadEntries(task, entries) {
         img.error = r.error;
         img.status = 'failed';
       }
-      task.downloaded_count += 1;
+      // 首次处理才累加；失败图片重试不重复计数。
+      if (countDownload) task.downloaded_count = Math.min(task.total, task.downloaded_count + 1);
       task.current = task.downloaded_count;
       task.message = `正在下载图片 ${task.downloaded_count}/${task.total}`;
       try { taskStore.saveTask(task); taskStore.saveImage(task.taskId, img, idx); } catch (e) { console.error('[STORE] save download failed:', e.message); }
@@ -573,7 +585,7 @@ app.post('/api/search/:taskId', (req, res) => {
 app.post('/api/tasks/:taskId/retry-failed', (req, res) => {
   const task = getTask(req.params.taskId);
   const failedEntries = task.images.map((img, idx) => ({ img, idx })).filter((e) => e.img.status === 'failed');
-  const needDownload = failedEntries.filter((e) => e.img.url && !e.img.diskPath);
+  const needDownload = failedEntries.filter((e) => e.img.url && !e.img.diskPath).map((e) => ({ ...e, countDownload: false }));
   failedEntries.forEach((e) => { e.img.status = 'pending'; e.img.error = null; });
   task.canceled = false;
   task.status = failedEntries.length ? 'queued' : task.status;

@@ -92,12 +92,21 @@ function loadTask(taskId) {
   // 结果正文按 /api/results 的 limit/offset 分页读取，避免重启时把万级结果全部载入内存。
   const task = { taskId: row.task_id, createdAt: row.created_at, images, results: {}, status: row.status,
     message: row.message, current: row.current, total: row.total, expected_total: row.expected_total,
-    searched_count: row.searched_count, downloaded_count: row.downloaded_count,
-    search_started_at: row.search_started_at, canceled: Boolean(row.canceled) };
+    searched_count: Math.min(row.total, row.searched_count), downloaded_count: Math.min(row.total, row.downloaded_count),
+    search_started_at: row.search_started_at, canceled: Boolean(row.canceled),
+    // URL 已全部保存在 SQLite；重启恢复后没有待提交批次，流水线可在下载队列清空后正常收尾。
+    submitDone: true, dlQueued: 0, pipelineActive: false };
   if (task.status === 'searching' || task.status === 'downloading') {
-    task.status = 'failed';
-    task.message = '服务曾中断，已保留已完成结果，可继续任务';
     task.images.forEach((image) => { if (image.status === 'searching' || image.status === 'downloading') image.status = 'pending'; });
+    const allTerminal = task.images.every((image) => ['completed', 'no_results', 'failed'].includes(image.status));
+    const failedCount = task.images.filter((image) => image.status === 'failed').length;
+    if (allTerminal) {
+      task.status = failedCount ? 'partial' : 'completed';
+      task.message = failedCount ? `部分完成，${failedCount} 张失败，已保留成功结果` : '完成';
+    } else {
+      task.status = 'failed';
+      task.message = '服务曾中断，已保留已完成结果，可继续任务';
+    }
     saveTask(task);
     task.images.forEach((image, index) => saveImage(task.taskId, image, index));
   }
