@@ -19,6 +19,8 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const ExcelJS = require('exceljs');
+const sharp = require('sharp');
 const { EventEmitter } = require('events');
 
 const MODE = (process.env.OZON_MODE || 'http').toLowerCase();
@@ -383,6 +385,7 @@ app.post('/api/upload/:taskId', upload.array('files', 200), (req, res) => {
   }));
   task.images.push(...uploaded);
   task.total = task.images.length;
+  task.downloaded_count = task.images.filter((image) => Boolean(image.diskPath)).length;
   task.status = 'queued';
   persistTask(task);
   res.json({ success: true, task_id: task.taskId, uploaded_count: uploaded.length });
@@ -402,6 +405,7 @@ app.post('/api/upload_b64', async (req, res) => {
   fs.writeFileSync(diskPath, buf);
   task.images.push({ name: safeName, originalName: fileName, diskPath, status: 'downloaded', size: buf.length });
   task.total = task.images.length;
+  task.downloaded_count = task.images.filter((image) => Boolean(image.diskPath)).length;
   task.status = 'queued';
   persistTask(task);
   res.json({ success: true, task_id: task.taskId, total_images: task.images.length });
@@ -630,6 +634,89 @@ app.get('/api/status/:taskId', (req, res) => {
       error: (t.results[img.name] || {}).error || null,
     })),
   });
+});
+
+function getBestProduct(resultPayload) {
+  if (!resultPayload) return null;
+  let entry;
+  try { entry = JSON.parse(resultPayload); } catch { return null; }
+  const products = Array.isArray(entry.results) ? entry.results.slice() : [];
+  products.sort((a, b) => (Number(a.rank) || 0) - (Number(b.rank) || 0));
+  return products[0] || null;
+}
+
+function firstString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : '';
+}
+
+function productLink(product) {
+  return firstString(product && (product.url || product.product_url || product.link || product.productLink || product.href));
+}
+
+function productImageLink(product) {
+  const value = product && (product.image || product.image_url || product.imageUrl || product.main_image || product.mainImage || product.photo);
+  if (Array.isArray(value)) return firstString(value[0]);
+  return firstString(value);
+}
+
+app.get('/api/export/:taskId.xlsx', async (req, res) => {
+  try {
+    const task = getTask(req.params.taskId);
+    const rows = taskStore.getExportRows(task.taskId);
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'OZON 图搜';
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet('图搜结果');
+    sheet.columns = [
+      { header: '上传图片', key: 'image', width: 24 },
+      { header: '商品链接', key: 'productLink', width: 58 },
+      { header: '商品主图链接', key: 'imageLink', width: 58 },
+    ];
+    sheet.freezePanes = { xSplit: 0, ySplit: 1 };
+    sheet.getRow(1).height = 24;
+    sheet.getRow(1).font = { name: 'Arial', bold: true, color: { argb: 'FFFFFFFF' } };
+    sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1769E0' } };
+    sheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center' };
+
+    for (const [index, row] of rows.entries()) {
+      const excelRow = sheet.addRow({ productLink: '', imageLink: '' });
+      excelRow.height = 92;
+      excelRow.font = { name: 'Arial', size: 10, color: { argb: '243047' } };
+      excelRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: index % 2 ? 'F7F9FC' : 'FFFFFFFF' } };
+      excelRow.alignment = { vertical: 'middle', wrapText: true };
+      excelRow.eachCell((cell) => { cell.border = { bottom: { style: 'thin', color: { argb: 'D9DEE7' } } }; });
+      const product = getBestProduct(row.resultPayload);
+      excelRow.getCell(2).value = productLink(product);
+      excelRow.getCell(3).value = productImageLink(product);
+      const imagePath = row.diskPath && path.resolve(row.diskPath);
+      if (imagePath && fs.existsSync(imagePath)) {
+        try {
+          const thumbnail = await sharp(imagePath)
+            .rotate()
+            .resize(112, 84, { fit: 'inside', withoutEnlargement: true })
+            .png()
+            .toBuffer();
+          const imageId = workbook.addImage({ buffer: thumbnail, extension: 'png' });
+          sheet.addImage(imageId, { tl: { col: 0.15, row: index + 1.15 }, ext: { width: 112, height: 84 } });
+        } catch (e) {
+          excelRow.getCell(1).value = row.originalName || row.imageName || row.imageUrl || '图片读取失败';
+        }
+      } else {
+        excelRow.getCell(1).value = row.originalName || row.imageName || row.imageUrl || row.imageError || '图片不可用';
+      }
+    }
+
+    res.status(200);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    const exportFileName = `OZON-search-${task.taskId}.xlsx`;
+    const encodedFileName = encodeURIComponent(`OZON图搜结果_${task.taskId}.xlsx`);
+    res.setHeader('Content-Disposition', `attachment; filename="${exportFileName}"; filename*=UTF-8''${encodedFileName}`);
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (e) {
+    console.error('[EXPORT] Excel export failed:', e.message);
+    if (!res.headersSent) res.status(500).json({ success: false, error: 'Excel 导出失败', detail: e.message });
+  }
 });
 
 app.get('/api/results/:taskId', (req, res) => {

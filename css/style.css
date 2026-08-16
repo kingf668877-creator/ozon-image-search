@@ -698,6 +698,29 @@ textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--prima
   color: var(--text-muted);
   text-align: right;
 }
+.stage-progress-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.stage-progress-item {
+  padding: 12px 14px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+}
+.stage-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.stage-progress-bar { height: 8px; margin-bottom: 0; }
+.download-progress-fill { background: var(--success, #20a36a); }
+.search-progress-fill { background: var(--primary); }
 .progress-detail {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -1211,6 +1234,7 @@ textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--prima
   .upload-tabs { flex-direction: column; gap: 0; border-bottom: 0; }
   .upload-tab { border-bottom: 1px solid var(--border); border-left: 3px solid transparent; margin-bottom: 0; }
   .upload-tab.active { border-left-color: var(--primary); border-bottom-color: var(--border); }
+  .stage-progress-grid { grid-template-columns: 1fr; }
   .progress-detail { grid-template-columns: repeat(2, 1fr); }
   .stats-row { grid-template-columns: repeat(2, 1fr); }
   .result-row { grid-template-columns: 80px 1fr; }

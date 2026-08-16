@@ -121,6 +121,14 @@ function getResultRows(taskId, limit = 500, offset = 0) {
   return db.prepare('SELECT image_name imageName, payload FROM results WHERE task_id = ? ORDER BY image_index LIMIT ? OFFSET ?')
     .all(taskId, Math.max(1, Math.min(5000, limit)), Math.max(0, offset));
 }
+function getExportRows(taskId) {
+  return db.prepare(`SELECT i.image_index imageIndex, i.name imageName, i.original_name originalName,
+    i.url imageUrl, i.disk_path diskPath, i.status imageStatus, i.error imageError,
+    r.payload resultPayload
+    FROM images i LEFT JOIN results r
+    ON r.task_id = i.task_id AND r.image_index = i.image_index
+    WHERE i.task_id = ? ORDER BY i.image_index`).all(taskId);
+}
 function getResultSummary(taskId) {
   return db.prepare('SELECT COUNT(*) image_count, COALESCE(SUM(result_count), 0) product_count FROM results WHERE task_id = ?').get(taskId);
 }
@@ -133,4 +141,4 @@ function deleteTask(taskId) {
   db.prepare('DELETE FROM tasks WHERE task_id = ?').run(taskId);
 }
 
-module.exports = { saveTask, saveImage, saveResult, persistTask, loadTask, listTasks, getResultRows, getResultSummary, clearTasks, deleteTask };
+module.exports = { saveTask, saveImage, saveResult, persistTask, loadTask, listTasks, getResultRows, getExportRows, getResultSummary, clearTasks, deleteTask };

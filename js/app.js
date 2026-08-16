@@ -425,6 +425,10 @@
     $('#progressCurrent').textContent = '0';
     $('#progressTotal').textContent = '0';
     $('#progressPercent').textContent = '0%';
+    $('#downloadProgressText').textContent = '0 / 0 · 0%';
+    $('#downloadProgressFill').style.width = '0%';
+    $('#searchProgressText').textContent = '0 / 0 · 0%';
+    $('#searchProgressFill').style.width = '0%';
     $('#foundProducts').textContent = '0';
     $('#elapsedTime').textContent = '00:00';
     $('#estimatedTime').textContent = '-';
@@ -521,9 +525,15 @@
     const cur = isSearchPhase ? searched : downloaded;
     $('#progressTotal').textContent = total;
     $('#progressCurrent').textContent = cur;
-    const pct = total ? Math.round((cur / total) * 100) : 0;
+    const pct = total ? Math.min(100, Math.round((cur / total) * 100)) : 0;
+    const downloadPct = total ? Math.min(100, Math.round((downloaded / total) * 100)) : 0;
+    const searchPct = total ? Math.min(100, Math.round((searched / total) * 100)) : 0;
     $('#progressPercent').textContent = pct + '%';
     $('#progressFill').style.width = pct + '%';
+    $('#downloadProgressText').textContent = `${downloaded} / ${total} · ${downloadPct}%`;
+    $('#downloadProgressFill').style.width = downloadPct + '%';
+    $('#searchProgressText').textContent = `${searched} / ${total} · ${searchPct}%`;
+    $('#searchProgressFill').style.width = searchPct + '%';
     // 边下边搜：搜索进行中同时显示下载进度和真实活跃并发。
     const dlNote = downloaded < total ? ` · 下载中 ${downloaded}/${total}` : '';
     const pool = j.search_pool || {};
@@ -767,18 +777,26 @@
   }
 
   // ============== Export / New ==============
-  function exportJson() {
-    const data = {
-      taskId: state.taskId,
-      totalImages: state.pagination.totalItems,
-      results: state.results,
-      exportedAt: new Date().toISOString(),
-    };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = h('a', { href: url, download: `OZON图搜结果_${state.taskId}.json` });
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
+  async function exportExcel() {
+    if (!state.taskId) { alert('暂无可导出的任务'); return; }
+    const btn = $('#exportExcelBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '正在导出...'; }
+    try {
+      const res = await fetch(`${state.apiBase}/api/export/${encodeURIComponent(state.taskId)}.xlsx`);
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(body || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = h('a', { href: url, download: `OZON图搜结果_${state.taskId}.xlsx` });
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('Excel 导出失败：' + e.message);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '导出 Excel'; }
+    }
   }
   function newSearch() {
     cleanupCurrentTask();
@@ -953,7 +971,7 @@
     on($('#searchBtn'), 'click', startSearch);
     on($('#cancelBtn'), 'click', cancelCurrentTask);
     on($('#clearBtn'), 'click', clearCurrentTab);
-    on($('#exportJsonBtn'), 'click', exportJson);
+    on($('#exportExcelBtn'), 'click', exportExcel);
     on($('#newSearchBtn'), 'click', newSearch);
     on($('#refreshHistoryBtn'), 'click', loadTaskHistory);
     on($('#loadMoreFilesBtn'), 'click', () => { state.fileRenderCount += FILE_RENDER_BATCH; renderFileList(); });

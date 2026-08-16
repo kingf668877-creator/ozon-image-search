@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OZON 图搜批量寻源 · 以图搜款找爆品</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23005bff'/%3E%3Ctext x='32' y='42' font-size='32' font-weight='800' font-family='Inter,sans-serif' fill='white' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="css/style.css?v=20260814a">
+  <link rel="stylesheet" href="css/style.css?v=20260816b">
 </head>
 <body>
   <!-- 背景装饰 -->
@@ -184,6 +184,16 @@ https://example.com/img3.webp
             <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
             <div class="progress-text"><span id="progressCurrent">0</span> / <span id="progressTotal">0</span> · <span id="progressPercent">0%</span></div>
           </div>
+          <div class="stage-progress-grid">
+            <div class="stage-progress-item">
+              <div class="stage-progress-head"><span>下载图片</span><span id="downloadProgressText">0 / 0 · 0%</span></div>
+              <div class="progress-bar stage-progress-bar"><div class="progress-fill download-progress-fill" id="downloadProgressFill"></div></div>
+            </div>
+            <div class="stage-progress-item">
+              <div class="stage-progress-head"><span>图搜图片</span><span id="searchProgressText">0 / 0 · 0%</span></div>
+              <div class="progress-bar stage-progress-bar"><div class="progress-fill search-progress-fill" id="searchProgressFill"></div></div>
+            </div>
+          </div>
           <div class="progress-detail">
             <div class="progress-detail-item"><span class="detail-label">搜索进度</span><span class="detail-val" id="currentImage">-</span></div>
             <div class="progress-detail-item"><span class="detail-label">已找到商品</span><span class="detail-val highlight" id="foundProducts">0</span></div>
@@ -209,7 +219,7 @@ https://example.com/img3.webp
             <p class="result-subtitle" id="resultSubtitle">共搜索 0 张图片，找到 0 个商品</p>
           </div>
           <div class="result-actions">
-            <button class="btn btn-ghost" id="exportJsonBtn">导出 JSON</button>
+            <button class="btn btn-ghost" id="exportExcelBtn">导出 Excel</button>
             <button class="btn btn-outline" id="newSearchBtn">新建搜索</button>
           </div>
         </div>
@@ -331,6 +341,6 @@ https://example.com/img3.webp
   </template>
 
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="js/app.js?v=20260816a"></script>
+  <script src="js/app.js?v=20260816b"></script>
 </body>
 </html>
