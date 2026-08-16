@@ -527,7 +527,7 @@
     // 边下边搜：搜索进行中同时显示下载进度和真实活跃并发。
     const dlNote = downloaded < total ? ` · 下载中 ${downloaded}/${total}` : '';
     const pool = j.search_pool || {};
-    const concurrencyNote = isSearchPhase ? ` · 并发 ${Number(pool.active) || 0}/${Number(pool.configured) || 5}` : '';
+    const concurrencyNote = isSearchPhase ? ` · 并发 ${Number(pool.active) || 0}/${Number(pool.configured) || 7}` : '';
     const cooldownSeconds = Math.max(0, Math.ceil((Number(pool.cooldown_remaining_ms) || 0) / 1000));
     const cooldownNote = isSearchPhase && pool.cooling_down ? ` · 请求保护暂停 ${cooldownSeconds}秒` : '';
     $('#progressStatus').textContent = (isSearchPhase && j.status === 'searching') ? `搜索中 ${cur}/${total}${dlNote}${concurrencyNote}${cooldownNote}` : (j.message || j.status || '准备中');

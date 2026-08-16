@@ -13,8 +13,12 @@ const http = require('http');
 const { findOzonTab } = require('./ozonSession');
 const { parseProductsFromTileGrid } = require('./ozonParse');
 
-const BASE_CONCURRENCY = Number(process.env.OZON_HTTP_BASE_CONCURRENCY || process.env.OZON_HTTP_CONCURRENCY || 5);
-const MAX_CONCURRENCY = Math.max(BASE_CONCURRENCY, Number(process.env.OZON_HTTP_MAX_CONCURRENCY || 7));
+const BASE_CONCURRENCY = Number(process.env.OZON_HTTP_BASE_CONCURRENCY || process.env.OZON_HTTP_CONCURRENCY || 7);
+const MAX_CONCURRENCY = Math.max(BASE_CONCURRENCY, Number(process.env.OZON_HTTP_MAX_CONCURRENCY || 9));
+const FALLBACK_CONCURRENCY = Math.min(
+  MAX_CONCURRENCY,
+  Number(process.env.OZON_HTTP_FALLBACK_CONCURRENCY || 5)
+);
 const PROMOTE_AFTER_SUCCESSES = Number(process.env.OZON_HTTP_PROMOTE_SUCCESSES || 100);
 const PROMOTE_INTERVAL_MS = Number(process.env.OZON_HTTP_PROMOTE_INTERVAL_MS || 60000);
 const BASE_BACKOFF_MS = Number(process.env.OZON_HTTP_BACKOFF_MS || 15000);
@@ -140,7 +144,7 @@ function markGuardError(error) {
   if (cooldownUntil <= now) consecutiveGuardBursts += 1;
   guardErrorCount += 1;
   successesSincePromotion = 0;
-  currentConcurrency = BASE_CONCURRENCY;
+  currentConcurrency = FALLBACK_CONCURRENCY;
   const backoffMs = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * (2 ** Math.min(3, consecutiveGuardBursts - 1)));
   cooldownUntil = Math.max(cooldownUntil, now + backoffMs);
   lastGuardError = {
@@ -392,6 +396,7 @@ function getPoolStats() {
   return {
     configured: currentConcurrency,
     base_concurrency: BASE_CONCURRENCY,
+    fallback_concurrency: FALLBACK_CONCURRENCY,
     max_concurrency: MAX_CONCURRENCY,
     pool_size: handlePool.length,
     active: handlePool.filter((h) => h.busy).length,
