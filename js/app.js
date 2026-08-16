@@ -528,7 +528,9 @@
     const dlNote = downloaded < total ? ` · 下载中 ${downloaded}/${total}` : '';
     const pool = j.search_pool || {};
     const concurrencyNote = isSearchPhase ? ` · 并发 ${Number(pool.active) || 0}/${Number(pool.configured) || 5}` : '';
-    $('#progressStatus').textContent = (isSearchPhase && j.status === 'searching') ? `搜索中 ${cur}/${total}${dlNote}${concurrencyNote}` : (j.message || j.status || '准备中');
+    const cooldownSeconds = Math.max(0, Math.ceil((Number(pool.cooldown_remaining_ms) || 0) / 1000));
+    const cooldownNote = isSearchPhase && pool.cooling_down ? ` · 请求保护暂停 ${cooldownSeconds}秒` : '';
+    $('#progressStatus').textContent = (isSearchPhase && j.status === 'searching') ? `搜索中 ${cur}/${total}${dlNote}${concurrencyNote}${cooldownNote}` : (j.message || j.status || '准备中');
     // 商品总数由服务端从 SQLite 汇总返回，避免用图片数冒充商品数。
     const products = Number.isFinite(Number(j.total_products)) ? Number(j.total_products) : 0;
     $('#foundProducts').textContent = products;

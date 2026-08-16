@@ -13,13 +13,26 @@ const http = require('http');
 const { findOzonTab } = require('./ozonSession');
 const { parseProductsFromTileGrid } = require('./ozonParse');
 
-const DEFAULT_CONCURRENCY = Number(process.env.OZON_HTTP_CONCURRENCY || 5);
+const BASE_CONCURRENCY = Number(process.env.OZON_HTTP_BASE_CONCURRENCY || process.env.OZON_HTTP_CONCURRENCY || 5);
+const MAX_CONCURRENCY = Math.max(BASE_CONCURRENCY, Number(process.env.OZON_HTTP_MAX_CONCURRENCY || 7));
+const PROMOTE_AFTER_SUCCESSES = Number(process.env.OZON_HTTP_PROMOTE_SUCCESSES || 100);
+const PROMOTE_INTERVAL_MS = Number(process.env.OZON_HTTP_PROMOTE_INTERVAL_MS || 60000);
+const BASE_BACKOFF_MS = Number(process.env.OZON_HTTP_BACKOFF_MS || 15000);
+const MAX_BACKOFF_MS = Number(process.env.OZON_HTTP_MAX_BACKOFF_MS || 120000);
 const MIN_INTERVAL_MS = Number(process.env.OZON_HTTP_MIN_INTERVAL_MS || 0);
+const GUARDED_STATUSES = new Set([402, 403, 429]);
 
 const handlePool = [];
 let poolInitPromise = null;
 let lastRequestAt = 0;
 let waitingCount = 0;
+let currentConcurrency = BASE_CONCURRENCY;
+let cooldownUntil = 0;
+let guardErrorCount = 0;
+let consecutiveGuardBursts = 0;
+let successesSincePromotion = 0;
+let lastPromotionAt = Date.now();
+let lastGuardError = null;
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -78,10 +91,10 @@ async function attachOneHandle() {
 }
 
 async function ensurePool() {
-  if (handlePool.length >= DEFAULT_CONCURRENCY) return;
+  if (handlePool.length >= currentConcurrency) return;
   if (poolInitPromise) return poolInitPromise;
   poolInitPromise = (async () => {
-    while (handlePool.length < DEFAULT_CONCURRENCY) {
+    while (handlePool.length < currentConcurrency) {
       try {
         const h = await attachOneHandle();
         handlePool.push(h);
@@ -94,17 +107,58 @@ async function ensurePool() {
   await poolInitPromise;
 }
 
-async function acquireHandle() {
-  await ensurePool();
-  if (!handlePool.length) {
-    const err = new Error('no_handle');
-    err.code = 'no_handle';
-    throw err;
+async function waitForCooldown() {
+  while (cooldownUntil > Date.now()) {
+    await sleep(Math.min(1000, cooldownUntil - Date.now()));
   }
+}
+
+function markGuardError(error) {
+  if (!GUARDED_STATUSES.has(Number(error && error.status))) return false;
+  const now = Date.now();
+  if (cooldownUntil <= now) consecutiveGuardBursts += 1;
+  guardErrorCount += 1;
+  successesSincePromotion = 0;
+  currentConcurrency = BASE_CONCURRENCY;
+  const backoffMs = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * (2 ** Math.min(3, consecutiveGuardBursts - 1)));
+  cooldownUntil = Math.max(cooldownUntil, now + backoffMs);
+  lastGuardError = {
+    status: Number(error.status),
+    code: error.code || 'rate_limited',
+    message: error.message,
+    at: Date.now(),
+    backoff_ms: backoffMs,
+  };
+  return true;
+}
+
+function markSuccess() {
+  if (cooldownUntil <= Date.now()) consecutiveGuardBursts = 0;
+  successesSincePromotion += 1;
+  if (
+    currentConcurrency < MAX_CONCURRENCY &&
+    successesSincePromotion >= PROMOTE_AFTER_SUCCESSES &&
+    Date.now() - lastPromotionAt >= PROMOTE_INTERVAL_MS
+  ) {
+    currentConcurrency += 1;
+    successesSincePromotion = 0;
+    lastPromotionAt = Date.now();
+  }
+}
+
+async function acquireHandle() {
   waitingCount += 1;
   try {
     while (true) {
-      const idle = handlePool.find((h) => !h.busy);
+      await waitForCooldown();
+      await ensurePool();
+      if (!handlePool.length) {
+        const err = new Error('no_handle');
+        err.code = 'no_handle';
+        throw err;
+      }
+      const active = handlePool.filter((h) => h.busy).length;
+      const idle = active < currentConcurrency ? handlePool.find((h) => !h.busy) : null;
       if (idle) {
         idle.busy = true;
         idle.lastUsedAt = Date.now();
@@ -172,8 +226,9 @@ async function uploadViaBrowser(handle, fileBuffer, fileName) {
   try { out = JSON.parse(r.result.value || 'null'); } catch { out = null; }
   if (!out || !out.ok || !out.json || !out.json.imageId) {
     const err = new Error('upload_failed: status=' + (out && out.status) + ' raw=' + (out && out.raw) + ' err=' + (out && out.error));
-    err.code = (out && (out.status === 401 || out.status === 403)) ? 'auth_invalid' : 'upload_failed';
-    err.status = out && out.status;
+    const status = Number(out && out.status);
+    err.code = status === 401 ? 'auth_invalid' : (GUARDED_STATUSES.has(status) ? 'rate_limited' : 'upload_failed');
+    err.status = status || null;
     err.detail = out;
     throw err;
   }
@@ -207,14 +262,15 @@ async function searchByImageIdViaBrowser(handle, imageId) {
   try { out = JSON.parse(r.result.value || 'null'); } catch { out = null; }
   if (!out || !out.ok) {
     const err = new Error('search_failed: ' + (out && (out.error || ('status=' + out.status))));
-    err.code = (out && (out.status === 401 || out.status === 403)) ? 'auth_invalid' : 'search_failed';
-    err.status = out && out.status;
+    const status = Number(out && out.status);
+    err.code = status === 401 ? 'auth_invalid' : (GUARDED_STATUSES.has(status) ? 'rate_limited' : 'search_failed');
+    err.status = status || null;
     throw err;
   }
   return parseProductsFromTileGrid(out.json);
 }
 
-async function searchByFile(fileBuffer, fileName) {
+async function searchByFileOnce(fileBuffer, fileName) {
   let handle = null;
   const tTotal = Date.now();
   try {
@@ -225,7 +281,7 @@ async function searchByFile(fileBuffer, fileName) {
     try {
       up = await uploadViaBrowser(handle, fileBuffer, fileName);
     } catch (e) {
-      if (e.code === 'auth_invalid') throw e;
+      if (e.code === 'auth_invalid' || e.code === 'rate_limited') throw e;
       handle = await resetHandle(handle);
       up = await uploadViaBrowser(handle, fileBuffer, fileName);
     }
@@ -239,7 +295,7 @@ async function searchByFile(fileBuffer, fileName) {
         products = await searchByImageIdViaBrowser(handle, up.imageId);
         break;
       } catch (e) {
-        if (e.code === 'auth_invalid' || searchAttempts >= 2) throw e;
+        if (e.code === 'auth_invalid' || e.code === 'rate_limited' || searchAttempts >= 2) throw e;
         await sleep(1000);
       }
     }
@@ -257,6 +313,22 @@ async function searchByFile(fileBuffer, fileName) {
   } finally {
     if (handle) releaseHandle(handle);
   }
+}
+
+async function searchByFile(fileBuffer, fileName) {
+  let guardAttempt = 0;
+  while (guardAttempt < 2) {
+    try {
+      const result = await searchByFileOnce(fileBuffer, fileName);
+      markSuccess();
+      return result;
+    } catch (error) {
+      if (!markGuardError(error) || guardAttempt >= 1) throw error;
+      guardAttempt += 1;
+      await waitForCooldown();
+    }
+  }
+  throw new Error('search_failed_after_guard_retry');
 }
 
 async function resetHandle(handle) {
@@ -283,12 +355,20 @@ async function uploadImage(fileBuffer, fileName) {
 }
 
 function getPoolStats() {
+  const now = Date.now();
   return {
-    configured: DEFAULT_CONCURRENCY,
+    configured: currentConcurrency,
+    base_concurrency: BASE_CONCURRENCY,
+    max_concurrency: MAX_CONCURRENCY,
     pool_size: handlePool.length,
     active: handlePool.filter((h) => h.busy).length,
     idle: handlePool.filter((h) => !h.busy).length,
     waiting: waitingCount,
+    cooling_down: cooldownUntil > now,
+    cooldown_remaining_ms: Math.max(0, cooldownUntil - now),
+    guard_error_count: guardErrorCount,
+    successes_until_promotion: Math.max(0, PROMOTE_AFTER_SUCCESSES - successesSincePromotion),
+    last_guard_error: lastGuardError,
   };
 }
 
@@ -296,7 +376,8 @@ module.exports = {
   searchByFile,
   searchByImageId,
   uploadImage,
-  DEFAULT_CONCURRENCY,
+  DEFAULT_CONCURRENCY: BASE_CONCURRENCY,
+  MAX_CONCURRENCY,
   ensurePool,
   getPoolStats,
 };
