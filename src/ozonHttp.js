@@ -13,17 +13,17 @@ const http = require('http');
 const { findOzonTab } = require('./ozonSession');
 const { parseProductsFromTileGrid } = require('./ozonParse');
 
-const BASE_CONCURRENCY = Number(process.env.OZON_HTTP_BASE_CONCURRENCY || process.env.OZON_HTTP_CONCURRENCY || 7);
-const MAX_CONCURRENCY = Math.max(BASE_CONCURRENCY, Number(process.env.OZON_HTTP_MAX_CONCURRENCY || 9));
+const BASE_CONCURRENCY = Number(process.env.OZON_HTTP_BASE_CONCURRENCY || process.env.OZON_HTTP_CONCURRENCY || 5);
+const MAX_CONCURRENCY = Math.max(BASE_CONCURRENCY, Number(process.env.OZON_HTTP_MAX_CONCURRENCY || 7));
 const FALLBACK_CONCURRENCY = Math.min(
   MAX_CONCURRENCY,
-  Number(process.env.OZON_HTTP_FALLBACK_CONCURRENCY || 5)
+  Number(process.env.OZON_HTTP_FALLBACK_CONCURRENCY || 3)
 );
 const PROMOTE_AFTER_SUCCESSES = Number(process.env.OZON_HTTP_PROMOTE_SUCCESSES || 100);
 const PROMOTE_INTERVAL_MS = Number(process.env.OZON_HTTP_PROMOTE_INTERVAL_MS || 60000);
 const BASE_BACKOFF_MS = Number(process.env.OZON_HTTP_BACKOFF_MS || 15000);
-const MAX_BACKOFF_MS = Number(process.env.OZON_HTTP_MAX_BACKOFF_MS || 120000);
-const MIN_INTERVAL_MS = Number(process.env.OZON_HTTP_MIN_INTERVAL_MS || 0);
+const MAX_BACKOFF_MS = Number(process.env.OZON_HTTP_MAX_BACKOFF_MS || 180000);
+const MIN_INTERVAL_MS = Number(process.env.OZON_HTTP_MIN_INTERVAL_MS || 500);
 const GUARDED_STATUSES = new Set([402, 403, 429]);
 const OBSERVED_STATUSES = new Set([402, 403, 409, 429]);
 const RESPONSE_BODY_LIMIT = Number(process.env.OZON_HTTP_ERROR_BODY_LIMIT || 2048);
