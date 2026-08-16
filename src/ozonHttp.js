@@ -21,6 +21,9 @@ const BASE_BACKOFF_MS = Number(process.env.OZON_HTTP_BACKOFF_MS || 15000);
 const MAX_BACKOFF_MS = Number(process.env.OZON_HTTP_MAX_BACKOFF_MS || 120000);
 const MIN_INTERVAL_MS = Number(process.env.OZON_HTTP_MIN_INTERVAL_MS || 0);
 const GUARDED_STATUSES = new Set([402, 403, 429]);
+const OBSERVED_STATUSES = new Set([402, 403, 409, 429]);
+const RESPONSE_BODY_LIMIT = Number(process.env.OZON_HTTP_ERROR_BODY_LIMIT || 2048);
+const ERROR_EVENT_LIMIT = Number(process.env.OZON_HTTP_ERROR_EVENT_LIMIT || 50);
 
 const handlePool = [];
 let poolInitPromise = null;
@@ -33,8 +36,26 @@ let consecutiveGuardBursts = 0;
 let successesSincePromotion = 0;
 let lastPromotionAt = Date.now();
 let lastGuardError = null;
+const errorEvents = [];
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+function recordErrorEvent(error) {
+  const status = Number(error && error.status);
+  if (!OBSERVED_STATUSES.has(status)) return;
+  const detail = error && error.detail;
+  const body = detail && (detail.raw || detail.body || detail.error);
+  errorEvents.push({
+    at: Date.now(),
+    stage: error.stage || 'unknown',
+    status,
+    code: error.code || 'request_failed',
+    concurrency: currentConcurrency,
+    active: handlePool.filter((h) => h.busy).length,
+    body: String(body || '').slice(0, RESPONSE_BODY_LIMIT),
+  });
+  if (errorEvents.length > ERROR_EVENT_LIMIT) errorEvents.splice(0, errorEvents.length - ERROR_EVENT_LIMIT);
+}
 
 function httpJson(url) {
   return new Promise((resolve, reject) => {
@@ -208,7 +229,7 @@ async function uploadViaBrowser(handle, fileBuffer, fileName) {
         const text = await upRes.text().catch(() => '');
         let json = {};
         try { json = JSON.parse(text); } catch {}
-        return { ok: upRes.ok, status: upRes.status, raw: text.slice(0, 400), json };
+        return { ok: upRes.ok, status: upRes.status, raw: text.slice(0, ${RESPONSE_BODY_LIMIT}), json };
       } catch (e) {
         return { ok: false, error: String(e && e.message || e) };
       }
@@ -227,9 +248,11 @@ async function uploadViaBrowser(handle, fileBuffer, fileName) {
   if (!out || !out.ok || !out.json || !out.json.imageId) {
     const err = new Error('upload_failed: status=' + (out && out.status) + ' raw=' + (out && out.raw) + ' err=' + (out && out.error));
     const status = Number(out && out.status);
-    err.code = status === 401 ? 'auth_invalid' : (GUARDED_STATUSES.has(status) ? 'rate_limited' : 'upload_failed');
+    err.code = status === 401 ? 'auth_invalid' : (GUARDED_STATUSES.has(status) ? 'rate_limited' : (status === 409 ? 'conflict' : 'upload_failed'));
     err.status = status || null;
+    err.stage = 'upload';
     err.detail = out;
+    recordErrorEvent(err);
     throw err;
   }
   return out.json;
@@ -242,8 +265,10 @@ async function searchByImageIdViaBrowser(handle, imageId) {
         const searchPath = '/search-by-image?image_id=' + ${JSON.stringify(imageId)};
         const apiUrl = '/api/entrypoint-api.bx/page/json/v2?url=' + encodeURIComponent(searchPath);
         const res = await fetch(apiUrl, { credentials: 'include' });
-        if (!res.ok) return { ok: false, status: res.status, error: 'HTTP ' + res.status };
-        const json = await res.json();
+        const text = await res.text().catch(() => '');
+        if (!res.ok) return { ok: false, status: res.status, error: 'HTTP ' + res.status, raw: text.slice(0, ${RESPONSE_BODY_LIMIT}) };
+        let json = {};
+        try { json = JSON.parse(text); } catch {}
         return { ok: true, status: res.status, json };
       } catch (e) {
         return { ok: false, error: String(e && e.message || e) };
@@ -263,8 +288,11 @@ async function searchByImageIdViaBrowser(handle, imageId) {
   if (!out || !out.ok) {
     const err = new Error('search_failed: ' + (out && (out.error || ('status=' + out.status))));
     const status = Number(out && out.status);
-    err.code = status === 401 ? 'auth_invalid' : (GUARDED_STATUSES.has(status) ? 'rate_limited' : 'search_failed');
+    err.code = status === 401 ? 'auth_invalid' : (GUARDED_STATUSES.has(status) ? 'rate_limited' : (status === 409 ? 'conflict' : 'search_failed'));
     err.status = status || null;
+    err.stage = 'search';
+    err.detail = out;
+    recordErrorEvent(err);
     throw err;
   }
   return parseProductsFromTileGrid(out.json);
@@ -282,8 +310,13 @@ async function searchByFileOnce(fileBuffer, fileName) {
       up = await uploadViaBrowser(handle, fileBuffer, fileName);
     } catch (e) {
       if (e.code === 'auth_invalid' || e.code === 'rate_limited') throw e;
-      handle = await resetHandle(handle);
-      up = await uploadViaBrowser(handle, fileBuffer, fileName);
+      if (e.code === 'conflict') {
+        await sleep(1000);
+        up = await uploadViaBrowser(handle, fileBuffer, fileName);
+      } else {
+        handle = await resetHandle(handle);
+        up = await uploadViaBrowser(handle, fileBuffer, fileName);
+      }
     }
     const uploadSeconds = (Date.now() - tUpload) / 1000;
     const tSearch = Date.now();
@@ -369,6 +402,8 @@ function getPoolStats() {
     guard_error_count: guardErrorCount,
     successes_until_promotion: Math.max(0, PROMOTE_AFTER_SUCCESSES - successesSincePromotion),
     last_guard_error: lastGuardError,
+    observed_error_count: errorEvents.length,
+    error_events: errorEvents.slice(),
   };
 }
 
