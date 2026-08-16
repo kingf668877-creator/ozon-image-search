@@ -384,8 +384,6 @@
       }
       const submitted = Math.min(i + batch.length, allUrls.length);
       $('#progressStatus').textContent = `已提交 ${submitted}/${allUrls.length}，边下载边搜索`;
-      $('#progressTotal').textContent = allUrls.length;
-      $('#progressCurrent').textContent = submitted;
     }
     // 收尾重试一轮失败的批次；若仍失败则抛出让用户知道有图片未提交。
     const stillFailed = [];
