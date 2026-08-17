@@ -262,11 +262,12 @@ async function uploadViaBrowser(handle, fileBuffer, fileName) {
   return out.json;
 }
 
-async function searchByImageIdViaBrowser(handle, imageId) {
+async function searchByImageIdViaBrowser(handle, imageId, page) {
+  const pageSuffix = (page && page > 1) ? `&page=${page}` : '';
   const expr = `
     (async () => {
       try {
-        const searchPath = '/search-by-image?image_id=' + ${JSON.stringify(imageId)};
+        const searchPath = '/search-by-image?image_id=' + ${JSON.stringify(imageId)} + '${pageSuffix}';
         const apiUrl = '/api/entrypoint-api.bx/page/json/v2?url=' + encodeURIComponent(searchPath);
         const res = await fetch(apiUrl, { credentials: 'include' });
         const text = await res.text().catch(() => '');
@@ -379,9 +380,9 @@ async function resetHandle(handle) {
   return fresh;
 }
 
-async function searchByImageId(imageId) {
+async function searchByImageId(imageId, page) {
   const handle = await acquireHandle();
-  try { return await searchByImageIdViaBrowser(handle, imageId); }
+  try { return await searchByImageIdViaBrowser(handle, imageId, page); }
   finally { releaseHandle(handle); }
 }
 

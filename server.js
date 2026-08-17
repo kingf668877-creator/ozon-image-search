@@ -90,6 +90,7 @@ function destroyTask(taskId) {
   try { if (fs.existsSync(taskDir)) fs.rmSync(taskDir, { recursive: true, force: true }); } catch (e) { /* ignore */ }
   STATE.tasks.delete(taskId);
   try { taskStore.deleteTask(taskId); } catch (e) { console.error('[STORE] delete task failed:', e.message); }
+  destroyPageCache(taskId);
 }
 function getTask(taskId) {
   let t = STATE.tasks.get(taskId);
@@ -780,6 +781,99 @@ app.post('/api/tasks/:taskId/cancel', (req, res) => {
   t.canceled = true;
   t.status = 'failed';
   res.json({ success: true });
+});
+
+// ============== 按页获取商品（上一页/下一页） ==============
+// 页缓存：pageCache[taskId][imageName][page] = { items, fetchedAt }
+const PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
+const pageCache = new Map();
+
+function getPageCache(taskId, imageName, page) {
+  const task = pageCache.get(taskId);
+  if (!task) return null;
+  const img = task.get(imageName);
+  if (!img) return null;
+  const entry = img.get(page);
+  if (!entry || Date.now() - entry.fetchedAt > PAGE_CACHE_TTL_MS) return null;
+  return entry;
+}
+
+function setPageCache(taskId, imageName, page, items) {
+  let task = pageCache.get(taskId);
+  if (!task) { task = new Map(); pageCache.set(taskId, task); }
+  let img = task.get(imageName);
+  if (!img) { img = new Map(); task.set(imageName, img); }
+  img.set(page, { items, fetchedAt: Date.now() });
+}
+
+function destroyPageCache(taskId) { pageCache.delete(taskId); }
+
+const pageFetchLocks = new Map();
+function getPageLock(taskId, imageName, page) {
+  const key = `${taskId}|${imageName}|${page}`;
+  let lock = pageFetchLocks.get(key);
+  if (!lock) {
+    lock = Promise.resolve();
+    pageFetchLocks.set(key, lock);
+  }
+  return lock;
+}
+
+app.get('/api/results_page/:taskId', async (req, res) => {
+  const { taskId } = req.params;
+  const page = Math.max(1, Math.min(20, Number(req.query.page) || 1));
+  const imageName = req.query.image;
+  try {
+    const t = getTask(taskId);
+    if (!imageName) return res.status(400).json({ success: false, error: 'missing image parameter' });
+
+    // 从 SQLite 或内存中取该图片的第一页结果，拿到 imageId
+    const stored = taskStore.getResultRows(t.taskId, 500, 0).find((r) => r.imageName === imageName);
+    let imageId = null;
+    let firstPage = null;
+    if (stored) {
+      try {
+        const payload = JSON.parse(stored.payload);
+        imageId = payload.imageId;
+        firstPage = payload.results || payload.products || [];
+      } catch {}
+    }
+    if (!imageId) return res.status(404).json({ success: false, error: 'image_not_found', message: '该图片没有搜索结果' });
+
+    // 第 1 页：直接返回已有结果，不发 OZON 请求
+    if (page === 1) {
+      return res.json({ success: true, page: 1, image_id: imageId, items: firstPage, has_next: true, cached: true });
+    }
+
+    // 其他页：查缓存
+    const cached = getPageCache(taskId, imageName, page);
+    if (cached) {
+      return res.json({ success: true, page, image_id: imageId, items: cached.items, has_next: cached.items.length >= 12, cached: true });
+    }
+
+    // 缓存未命中：并发锁防止重复请求
+    const lock = getPageLock(taskId, imageName, page);
+    const result = await lock.then(async () => {
+      const again = getPageCache(taskId, imageName, page);
+      if (again) return again;
+      const products = await ozonHttp.searchByImageId(imageId, page);
+      const items = Array.isArray(products) ? products : (products && products.products) || [];
+      setPageCache(taskId, imageName, page, items);
+      return { items, fetchedAt: Date.now() };
+    }).catch((e) => {
+      throw e;
+    }).finally(() => {
+      pageFetchLocks.delete(`${taskId}|${imageName}|${page}`);
+    });
+
+    const hasNext = result.items.length >= 12;
+    res.json({ success: true, page, image_id: imageId, items: result.items, has_next: hasNext, cached: false });
+  } catch (e) {
+    const code = e.code || 'page_fetch_failed';
+    console.error('[PAGE]', taskId, imageName, 'page', page, 'failed:', e.message);
+    const status = code === 'rate_limited' ? 429 : (code === 'auth_invalid' ? 401 : 500);
+    res.status(status).json({ success: false, error: code, message: e.message, page });
+  }
 });
 
 // 清理所有上传文件和内存任务（页面关闭/刷新时调用）
