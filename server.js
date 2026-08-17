@@ -660,6 +660,33 @@ function productImageLink(product) {
   return firstString(value);
 }
 
+function productTitle(product) {
+  return firstString(product && (product.title || product.name || product.productName));
+}
+
+function productPrice(product) {
+  return firstString(product && (product.price || product.currentPrice || product.priceText));
+}
+
+function productRating(product) {
+  return firstString(product && (product.rating || product.ratingValue));
+}
+
+function productReviews(product) {
+  const value = product && (product.reviews || product.reviewCount || product.review_count);
+  const text = firstString(value);
+  return text ? text.replace(/[^\d]/g, '') : '';
+}
+
+// 方案A：URL 任务返回原始图片链接；本地文件任务返回可访问的服务端链接。
+const PUBLIC_BASE = process.env.OZON_PUBLIC_BASE || 'https://yidong.dianleida.net:21999';
+
+function uploadedImageLink(row) {
+  if (row.imageUrl) return firstString(row.imageUrl);
+  if (row.imageName) return `${PUBLIC_BASE}/uploads/${row.taskId}/${encodeURIComponent(row.imageName)}`;
+  return '';
+}
+
 app.get('/api/export/:taskId.xlsx', async (req, res) => {
   try {
     const task = getTask(req.params.taskId);
@@ -670,7 +697,12 @@ app.get('/api/export/:taskId.xlsx', async (req, res) => {
     const sheet = workbook.addWorksheet('图搜结果');
     sheet.columns = [
       { header: '上传图片', key: 'image', width: 24 },
+      { header: '商品标题', key: 'title', width: 42 },
       { header: '商品链接', key: 'productLink', width: 58 },
+      { header: '价格', key: 'price', width: 16 },
+      { header: '评分值', key: 'rating', width: 10 },
+      { header: '评分数', key: 'reviews', width: 10 },
+      { header: '上传图片链接', key: 'uploadLink', width: 58 },
       { header: '商品主图链接', key: 'imageLink', width: 58 },
     ];
     sheet.freezePanes = { xSplit: 0, ySplit: 1 };
@@ -687,8 +719,13 @@ app.get('/api/export/:taskId.xlsx', async (req, res) => {
       excelRow.alignment = { vertical: 'middle', wrapText: true };
       excelRow.eachCell((cell) => { cell.border = { bottom: { style: 'thin', color: { argb: 'D9DEE7' } } }; });
       const product = getBestProduct(row.resultPayload);
-      excelRow.getCell(2).value = productLink(product);
-      excelRow.getCell(3).value = productImageLink(product);
+      excelRow.getCell(2).value = productTitle(product);
+      excelRow.getCell(3).value = productLink(product);
+      excelRow.getCell(4).value = productPrice(product);
+      excelRow.getCell(5).value = productRating(product);
+      excelRow.getCell(6).value = productReviews(product);
+      excelRow.getCell(7).value = uploadedImageLink(row);
+      excelRow.getCell(8).value = productImageLink(product);
       const imagePath = row.diskPath && path.resolve(row.diskPath);
       if (imagePath && fs.existsSync(imagePath)) {
         try {
