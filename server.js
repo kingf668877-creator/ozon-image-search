@@ -280,6 +280,7 @@ async function startSearch(taskId) {
 // ============== Express ==============
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
+app.use('/api/cleanup_batch', express.text({ type: 'text/plain', limit: '1mb' }));
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
@@ -759,7 +760,11 @@ app.post('/api/cleanup/:taskId', (req, res) => {
 });
 
 app.post('/api/cleanup_batch', (req, res) => {
-  const { taskIds = [] } = req.body || {};
+  let payload = req.body || {};
+  if (typeof payload === 'string') {
+    try { payload = JSON.parse(payload); } catch { payload = {}; }
+  }
+  const { taskIds = [] } = payload;
   let removed = 0;
   for (const taskId of taskIds) {
     if (!taskId || typeof taskId !== 'string') continue;

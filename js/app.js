@@ -22,6 +22,15 @@
   const FREIGHT_BATCH_SIZE = 5;
   const FILE_RENDER_BATCH = 30;
   const POLL_INTERVAL = 2000;
+  const CLEANUP_STORAGE_KEY = 'pendingCleanupTaskIds';
+
+  function readPendingCleanupIds() {
+    try {
+      return new Set(JSON.parse(localStorage.getItem(CLEANUP_STORAGE_KEY) || '[]'));
+    } catch {
+      return new Set();
+    }
+  }
 
   // ============== 状态 ==============
   const state = {
@@ -38,8 +47,8 @@
     results: {},
     pagination: { currentPage: 1, pageSize: 50, totalItems: 0, imageNames: [] },
     cleanupSentTaskId: null,
-    // 记录本 tab 创建/访问过的所有 taskIds，关闭时一并清掉
-    ownedTaskIds: new Set(JSON.parse(sessionStorage.getItem('ownedTaskIds') || '[]')),
+    // 持久保存待清理任务；若浏览器退出时 Beacon 未送达，下次加载会补偿删除。
+    ownedTaskIds: readPendingCleanupIds(),
     isSearching: false,
     elapsedTimer: null,
   };
@@ -796,8 +805,8 @@
       if (btn) { btn.disabled = false; btn.textContent = '导出 Excel'; }
     }
   }
-  function newSearch() {
-    cleanupCurrentTask();
+  async function newSearch() {
+    await cleanupCurrentTask();
     state.files = [];
     state.urls = [];
     state.tableUrls = [];
@@ -822,10 +831,10 @@
   async function cleanupCurrentTask() {
     if (!state.taskId) return;
     try {
-      // 用 sendBeacon 确保页面关闭时也能发出去
-      navigator.sendBeacon(`${state.apiBase}/api/cleanup/${state.taskId}`);
-    } catch {}
-    try { await fetch(`${state.apiBase}/api/tasks/${state.taskId}/cancel`, { method: 'POST' }); } catch {}
+      await cleanupOwnedTasksConfirmed([state.taskId]);
+    } catch (e) {
+      console.warn('cleanup current task failed:', e);
+    }
   }
 
   async function cancelCurrentTask() {
@@ -918,43 +927,52 @@
   async function deleteHistoryTask(taskId) {
     if (!confirm('删除该任务？图片和搜索结果会从磁盘清除，不可恢复。')) return;
     try {
-      await fetch(`${state.apiBase}/api/cleanup/${taskId}`, { method: 'POST' });
-      state.ownedTaskIds.delete(taskId);
-      sessionStorage.setItem('ownedTaskIds', JSON.stringify(Array.from(state.ownedTaskIds)));
+      const res = await fetch(`${state.apiBase}/api/cleanup/${taskId}`, { method: 'POST' });
+      if (!res.ok) throw new Error(`cleanup_failed_${res.status}`);
+      forgetOwnedTasks([taskId]);
       loadTaskHistory();
     } catch (e) { alert('删除失败：' + e.message); }
   }
 
   // ============== Lifecycle ==============
+  function persistPendingCleanupIds() {
+    localStorage.setItem(CLEANUP_STORAGE_KEY, JSON.stringify(Array.from(state.ownedTaskIds)));
+  }
   function registerOwnedTask(taskId) {
     if (!taskId) return;
     state.ownedTaskIds.add(taskId);
-    sessionStorage.setItem('ownedTaskIds', JSON.stringify(Array.from(state.ownedTaskIds)));
+    persistPendingCleanupIds();
   }
-  function cleanupOwnedTasks() {
+  function forgetOwnedTasks(taskIds) {
+    taskIds.forEach((taskId) => state.ownedTaskIds.delete(taskId));
+    persistPendingCleanupIds();
+  }
+  async function cleanupOwnedTasksConfirmed(taskIds = Array.from(state.ownedTaskIds)) {
+    const ids = taskIds.filter(Boolean);
+    if (!ids.length) return true;
+    const res = await fetch(`${state.apiBase}/api/cleanup_batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskIds: ids }),
+    });
+    if (!res.ok) throw new Error(`cleanup_failed_${res.status}`);
+    forgetOwnedTasks(ids);
+    return true;
+  }
+  function cleanupOwnedTasksBeacon() {
     const ids = Array.from(state.ownedTaskIds);
-    if (!ids.length) return;
-    // sendBeacon 不支持 body，所以用 fetch keepalive 来发 POST
-    const body = JSON.stringify({ taskIds: ids });
-    try {
-      fetch(`${state.apiBase}/api/cleanup_batch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-        keepalive: true,
-      }).catch(() => {});
-    } catch {}
-    // 立刻清空 sessionStorage 避免重复清理
-    state.ownedTaskIds.clear();
-    sessionStorage.removeItem('ownedTaskIds');
+    if (!ids.length || !navigator.sendBeacon) return;
+    const body = new Blob([JSON.stringify({ taskIds: ids })], { type: 'text/plain;charset=UTF-8' });
+    navigator.sendBeacon(`${state.apiBase}/api/cleanup_batch`, body);
   }
   function setupLifecycle() {
-    // 任务生命周期跟随页面：刷新/关闭页面/关闭浏览器时，自动取消任务并删除图片与结果，不占用磁盘。
-    window.addEventListener('pagehide', () => { cleanupOwnedTasks(); });
+    // 退出时尽力发送 Beacon；不移除本地 ID，下次加载会再次确认删除。
+    window.addEventListener('pagehide', cleanupOwnedTasksBeacon);
+    window.addEventListener('beforeunload', cleanupOwnedTasksBeacon);
   }
 
   // ============== Init ==============
-  function init() {
+  async function init() {
     state.apiBase = getApiBase();
     $('#apiBaseInput').value = state.apiBase;
     setupBatchUpload();
@@ -974,6 +992,7 @@
     on($('#refreshHistoryBtn'), 'click', loadTaskHistory);
     on($('#loadMoreFilesBtn'), 'click', () => { state.fileRenderCount += FILE_RENDER_BATCH; renderFileList(); });
     state.fileRenderCount = FILE_RENDER_BATCH;
+    try { await cleanupOwnedTasksConfirmed(); } catch (e) { console.warn('startup cleanup failed:', e); }
     loadTaskHistory();
     // 默认使用线上后端，设置弹窗仍允许手动覆盖。
   }
