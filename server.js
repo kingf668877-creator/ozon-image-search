@@ -330,6 +330,34 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 8 * 1024 * 1024 } });
 
+// 1688 图搜服务状态代理（供网页状态页跨服务展示，服务端转发避免浏览器跨域）
+const ALI1688_PORT = Number(process.env.ALI1688_PORT || 5000);
+app.get('/api/status_1688', async (req, res) => {
+  const started = Date.now();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const r = await fetch(`http://127.0.0.1:${ALI1688_PORT}/api/health`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const body = await r.json().catch(() => ({}));
+    res.json({
+      online: true,
+      port: ALI1688_PORT,
+      status_code: r.status,
+      latency_ms: Date.now() - started,
+      detail: body,
+    });
+  } catch (err) {
+    res.json({
+      online: false,
+      port: ALI1688_PORT,
+      latency_ms: Date.now() - started,
+      error: err.name === 'AbortError' ? 'timeout' : 'connect_failed',
+    });
+  }
+});
 app.get('/api/health', (req, res) => {
   res.json({
     success: true,
