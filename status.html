@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>图搜服务状态 · OZON / 1688</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23005bff'/%3E%3Ctext x='32' y='44' font-size='34' font-weight='800' font-family='Arial' fill='white' text-anchor='middle'%3EO%3C/text%3E%3C/svg%3E">
+<style>
+:root{--bg:#0f1626;--card:#1a2332;--ink:#e8ecf3;--muted:#98a2b3;--ok:#12b76a;--warn:#f79009;--bad:#f04438;--accent:#005bff;--line:#2a3548}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:"Microsoft YaHei",system-ui,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.wrap{width:100%;max-width:680px}
+.head{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+.logo{width:46px;height:46px;border-radius:10px;background:var(--accent);display:grid;place-items:center;font-size:25px;font-weight:800;color:#fff}
+h1{font-size:20px;font-weight:700}
+.sub{font-size:12px;color:var(--muted);margin-top:3px}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tab{flex:1;padding:11px 0;text-align:center;border-radius:10px;cursor:pointer;font-size:14.5px;font-weight:600;background:var(--card);border:1px solid var(--line);color:var(--muted);transition:all .18s;user-select:none}
+.tab.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.tab:hover:not(.active){color:var(--ink)}
+.tab .t-badge{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}
+.t-badge.ok{background:#2ee6a8}.t-badge.bad{background:#ff6b60}.t-badge.think{background:var(--muted)}
+.refresh{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;font-size:12px;color:var(--muted)}
+button.re{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 20px;font-size:13px;cursor:pointer;font-family:inherit}
+button.re:hover{opacity:.88}
+.grid{display:grid;gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;display:flex;align-items:center;gap:14px}
+.dot{width:11px;height:11px;border-radius:50%;flex:none;background:var(--muted)}
+.dot.ok{background:var(--ok);box-shadow:0 0 10px rgba(18,183,106,.55)}
+.dot.bad{background:var(--bad);box-shadow:0 0 10px rgba(240,68,56,.55)}
+.dot.warn{background:var(--warn);box-shadow:0 0 10px rgba(247,144,9,.55)}
+.dot.think{background:var(--accent);animation:pulse 1.2s infinite}
+@keyframes pulse{50%{opacity:.35}}
+.info{flex:1;min-width:0}
+.name{font-size:14.5px;font-weight:600}
+.detail{font-size:12.5px;color:var(--muted);margin-top:4px;line-height:1.55;word-break:break-all}
+.badge{font-size:11px;padding:3px 9px;border-radius:5px;flex:none;font-weight:600}
+.badge.ok{background:rgba(18,183,106,.14);color:var(--ok)}
+.badge.bad{background:rgba(240,68,56,.14);color:var(--bad)}
+.badge.warn{background:rgba(247,144,9,.14);color:var(--warn)}
+.tip{background:rgba(240,68,56,.08);border:1px solid rgba(240,68,56,.25);border-radius:10px;padding:12px 14px;font-size:12.5px;color:#fda29b;line-height:1.7;display:none;margin-top:12px}
+.tip.show{display:block}
+.foot{margin-top:16px;text-align:center;font-size:11.5px;color:var(--muted);line-height:1.8}
+.pane{display:none}.pane.active{display:block}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div class="logo">O</div>
+    <div><h1>图搜服务状态</h1><div class="sub">yidong.dianleida.net:21999 · 每 5 秒自动刷新</div></div>
+  </div>
+  <div class="tabs">
+    <div class="tab active" id="tab-ozon" onclick="switchTab('ozon')"><span class="t-badge think" id="badge-ozon"></span>OZON 图搜</div>
+    <div class="tab" id="tab-1688" onclick="switchTab('1688')"><span class="t-badge think" id="badge-1688"></span>1688 图搜</div>
+  </div>
+  <div class="refresh"><span id="lastUpdate">检测中…</span><button class="re" onclick="check()">立即刷新</button></div>
+
+  <div class="pane active" id="pane-ozon">
+    <div class="grid">
+      <div class="card"><div class="dot think"></div><div class="info"><div class="name">图搜服务 (端口 5443)</div><div class="detail">检测中…</div></div></div>
+      <div class="card"><div class="dot think"></div><div class="info"><div class="name">Chrome + OZON 登录会话</div><div class="detail">检测中…</div></div></div>
+      <div class="card"><div class="dot think"></div><div class="info"><div class="name">并发搜索池</div><div class="detail">检测中…</div></div></div>
+      <div class="card"><div class="dot think"></div><div class="info"><div class="name">公网域名连通</div><div class="detail">检测中…</div></div></div>
+    </div>
+    <div class="tip" id="tip-ozon"></div>
+  </div>
+
+  <div class="pane" id="pane-1688">
+    <div class="grid">
+      <div class="card"><div class="dot think"></div><div class="info"><div class="name">1688 后端服务 (端口 5000)</div><div class="detail">检测中…</div></div></div>
+      <div class="card"><div class="dot think"></div><div class="info"><div class="name">服务详情</div><div class="detail">检测中…</div></div></div>
+    </div>
+    <div class="tip" id="tip-1688"></div>
+  </div>
+
+  <div class="foot">服务异常时：打开 TRAE 对话说一句“启动图搜服务”即可恢复（约 10 秒）；1688 到其专属对话恢复<br>页面能打开即公网域名正常</div>
+</div>
+<script>
+let curTab = 'ozon';
+const stateSummary = { ozon: null, 1688: null };
+
+function switchTab(t){
+  curTab = t;
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.pane').forEach(x => x.classList.remove('active'));
+  document.getElementById('tab-' + t).classList.add('active');
+  document.getElementById('pane-' + t).classList.add('active');
+}
+function card(paneId, idx){
+  return document.getElementById('pane-' + paneId).querySelectorAll('.card')[idx];
+}
+function setCard(paneId, idx, st, name, detail, badge){
+  const c = card(paneId, idx);
+  c.querySelector('.dot').className = 'dot ' + st;
+  c.querySelector('.name').textContent = name;
+  c.querySelector('.detail').textContent = detail;
+  let b = c.querySelector('.badge');
+  if(!b){ b = document.createElement('div'); c.appendChild(b); }
+  b.className = 'badge ' + st; b.textContent = badge;
+}
+function setTabBadge(t, st){
+  const el = document.getElementById('badge-' + t);
+  el.className = 't-badge ' + (st === 'ok' ? 'ok' : st === 'bad' ? 'bad' : 'think');
+}
+
+async function checkOzon(){
+  const tip = document.getElementById('tip-ozon');
+  tip.classList.remove('show');
+  let problems = [];
+  setCard('ozon', 3, 'ok', '公网域名连通', '你正通过 yidong.dianleida.net:21999 访问本页，域名正常', '正常');
+
+  let h = null;
+  try { const r = await fetch('/api/health', {cache:'no-store'}); h = await r.json(); } catch(e){}
+
+  if (h && h.success) {
+    const upMin = h.startedAt ? Math.max(0, Math.round((Date.now() - new Date(h.startedAt)) / 60000)) : null;
+    const upTxt = upMin === null ? '' : (upMin < 60 ? ' · 已运行 ' + upMin + ' 分钟' : ' · 已运行 ' + Math.floor(upMin/60) + ' 小时 ' + (upMin%60) + ' 分');
+    setCard('ozon', 0, 'ok', '图搜服务 (端口 5443)', '模式: ' + h.mode + upTxt, '正常');
+  } else {
+    setCard('ozon', 0, 'bad', '图搜服务 (端口 5443)', '服务无响应：打开 TRAE 对话让它重新启动服务', '异常');
+    problems.push('图搜服务无响应');
+  }
+
+  if (h) {
+    let s = null;
+    try { const r2 = await fetch('/api/session', {cache:'no-store'}); s = await r2.json(); } catch(e){}
+    if (s && (s.ok === true || s.authenticated === true)) {
+      setCard('ozon', 1, 'ok', 'Chrome + OZON 登录会话', 'Chrome 调试端口 ' + h.cdpPort + ' 正常，OZON 登录态有效，可以直接图搜', '正常');
+    } else {
+      setCard('ozon', 1, s ? 'warn' : 'bad', 'Chrome + OZON 登录会话',
+        s ? ('会话检查未通过：' + (s.message || s.reason || '详见服务日志') + '。图搜可能报 auth_invalid，请到服务器 Chrome 窗口重新登录 OZON')
+           : '无法获取会话信息，Chrome (9225) 未运行：到 TRAE 对话说“启动图搜浏览器”',
+        s ? '待登录' : '异常');
+      problems.push('OZON 会话未就绪');
+    }
+
+    const sp = h.search_pool || {};
+    const conf = sp.configured != null ? sp.configured : h.concurrency;
+    const cooling = sp.cooling_down;
+    setCard('ozon', 2, cooling ? 'warn' : 'ok', '并发搜索池',
+      '当前并发: ' + conf + ' / 最大 ' + (sp.max_concurrency || '-') + ' · 排队: ' + (sp.waiting || 0) +
+      (cooling ? (' · 风控冷却中，剩 ' + Math.round((sp.cooldown_remaining_ms||0)/1000) + ' 秒') : ' · 无冷却'),
+      cooling ? '冷却中' : '正常');
+    if (cooling) problems.push('风控冷却中');
+  }
+
+  if (problems.length) { tip.textContent = '需要处理 (' + problems.length + ')：' + problems.join('；'); tip.classList.add('show'); }
+  stateSummary.ozon = problems.length === 0 ? 'ok' : 'bad';
+  setTabBadge('ozon', stateSummary.ozon);
+}
+
+async function check1688(){
+  const tip = document.getElementById('tip-1688');
+  tip.classList.remove('show');
+  let d = null;
+  try { const r = await fetch('/api/status_1688', {cache:'no-store'}); d = await r.json(); } catch(e){}
+
+  if (d && d.online) {
+    const det = d.detail || {};
+    setCard('1688', 0, 'ok', '1688 后端服务 (端口 ' + d.port + ')', '在线 · 响应 ' + d.latency_ms + 'ms · HTTP ' + d.status_code, '正常');
+    const ver = det.version ? 'v' + det.version : '未知版本';
+    const st = det.status || '-';
+    const ts = det.timestamp ? new Date(det.timestamp).toLocaleString('zh-CN') : '-';
+    setCard('1688', 1, 'ok', '服务详情', '服务名: ' + (det.service || '1688-image-search') + ' · ' + ver + ' · 状态: ' + st + ' · 心跳时间: ' + ts, '正常');
+    stateSummary['1688'] = 'ok';
+  } else {
+    const reason = d ? (d.error === 'timeout' ? '响应超时(4秒)' : '连接失败') : '代理接口不可达';
+    setCard('1688', 0, 'bad', '1688 后端服务 (端口 ' + ((d && d.port) || 5000) + ')', '离线 · ' + reason + '。恢复方式：在 1688 专属对话里启动，或到服务器运行其启动脚本', '离线');
+    setCard('1688', 1, 'bad', '服务详情', '服务离线时无法获取版本与心跳信息', '—');
+    tip.textContent = '1688 图搜离线：该服务由独立对话维护（Python app.py，端口 5000）。到对应对话或服务器上重新启动即可。';
+    tip.classList.add('show');
+    stateSummary['1688'] = 'bad';
+  }
+  setTabBadge('1688', stateSummary['1688']);
+}
+
+async function check(){
+  document.getElementById('lastUpdate').textContent = '上次检测: ' + new Date().toLocaleTimeString('zh-CN');
+  await Promise.all([checkOzon(), check1688()]);
+}
+check();
+setInterval(check, 5000);
+</script>
+</body>
+</html>
